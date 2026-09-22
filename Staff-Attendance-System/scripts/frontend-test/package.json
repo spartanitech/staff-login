@@ -1,0 +1,8 @@
+{
+  "name": "staff-attendance-frontend-test",
+  "private": true,
+  "version": "1.0.0",
+  "description": "jsdom end-to-end test of the portal UI against a mock server that mirrors the Spring Boot API contract",
+  "scripts": { "test": "node e2e.js" },
+  "dependencies": { "jsdom": "24.1.3", "jspdf": "2.5.1", "xlsx": "0.18.5" }
+}

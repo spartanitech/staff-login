@@ -1,0 +1,19 @@
+# Spring Boot
+target/
+
+# Secrets
+.env
+attendance/.env
+application-local.properties
+
+# IntelliJ IDEA
+.idea/
+*.iml
+
+# Node (frontend test)
+node_modules/
+
+# Logs / OS
+*.log
+.DS_Store
+Thumbs.db

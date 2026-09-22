@@ -1,0 +1,46 @@
+services:
+
+  mysql:
+    image: mysql:8.0
+    container_name: attendance_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: staff_attendance_db
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "3306:3306"      # remove this if you don't need to reach MySQL from outside the host
+    volumes:
+      - attendance_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${DB_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    container_name: attendance_app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/staff_attendance_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Kolkata
+      DB_USERNAME: root
+      DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin@123}
+      SEED_DEMO_USERS: ${SEED_DEMO_USERS:-true}
+      # Use SPRING_PROFILES_ACTIVE=prod (and set CORS_ALLOWED_ORIGINS) for a real deployment behind HTTPS.
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8082}
+      # Live check-in photos live in this folder; the volume below keeps them when the container is rebuilt.
+      PHOTO_DIR: /data/photos
+    ports:
+      - "8082:8080"
+    volumes:
+      - attendance_photos:/data/photos
+
+volumes:
+  attendance_mysql_data:
+  attendance_photos:

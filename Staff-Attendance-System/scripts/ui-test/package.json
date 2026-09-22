@@ -1,0 +1,8 @@
+{
+  "name": "staff-attendance-ui-test",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Real-browser (headless Chromium) regression tests for the portal UI, against the mock API in ../frontend-test",
+  "scripts": { "test": "node ui-regression.js" },
+  "dependencies": { "@sparticuz/chromium": "131.0.1", "puppeteer-core": "23.11.1" }
+}

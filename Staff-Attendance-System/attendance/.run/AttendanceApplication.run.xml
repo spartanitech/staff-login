@@ -1,0 +1,14 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="AttendanceApplication" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="com.spartan.attendance.AttendanceApplication" />
+    <module name="attendance" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <envs>
+      <!-- Uses src/main/resources/application-local.properties (copy the .example file and fill in your MySQL password). -->
+      <env name="SPRING_PROFILES_ACTIVE" value="local" />
+    </envs>
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>
