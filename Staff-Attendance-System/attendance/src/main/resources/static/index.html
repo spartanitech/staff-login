@@ -22979,7 +22979,7 @@
             mmTitleEl.innerHTML = 'Weekly Stock Report';
 
             let tableRows = '';
-            WSR_CATALOG.forEach(function (group) {
+            WSR_CATALOG.forEach(function (group, gi) {
                 tableRows += '<tr class="dsr-cat-row"><td colspan="8">' + esc(group.cat) + '</td></tr>';
                 group.items.forEach(function (item, i) {
                     const row = wsrRowData(item);
@@ -22988,12 +22988,24 @@
                         '<td class="dsr-shop">' + esc(item) + '</td>' +
                         WSR_COLS.map(function (c) {
                             return '<td data-label="' + c.label + '" class="num">' +
-                                '<input class="dsr-cell-in" value="' + esc(row[c.key] || '') + '" inputmode="numeric" style="text-align:right;"' +
-                                ' oninput="wsrCellInput(\'' + iq + '\', \'' + c.key + '\', this.value)"></td>';
+                                '<input class="dsr-cell-in" id="wsr-in-' + gi + '-' + i + '-' + c.key + '" value="' + esc(row[c.key] || '') + '" inputmode="numeric" style="text-align:right;"' +
+                                ' oninput="wsrCellInput(\'' + iq + '\', \'' + c.key + '\', this.value); wsrRecalcTotals();"></td>';
                         }).join('') +
                         '</tr>';
                 });
+                tableRows += '<tr class="dsr-cat-total-row" style="background:#F6EFDC; font-weight:700;">' +
+                    '<td></td><td>' + esc(group.cat) + ' — Total</td>' +
+                    WSR_COLS.map(function (c) {
+                        return '<td class="num" id="wsr-cat-tot-' + gi + '-' + c.key + '">0</td>';
+                    }).join('') +
+                    '</tr>';
             });
+            tableRows += '<tr class="dsr-grand-total-row" style="background:#F3DFA0; font-weight:800;">' +
+                '<td colspan="2">GRAND TOTAL</td>' +
+                WSR_COLS.map(function (c) {
+                    return '<td class="num" id="wsr-grand-tot-' + c.key + '">0</td>';
+                }).join('') +
+                '</tr>';
 
             mmBodyEl.innerHTML =
                 '<div class="dsr-sheet">' +
@@ -23027,6 +23039,35 @@
                 '</div>';
 
             mmModalOverlay.classList.add('open');
+            wsrRecalcTotals();
+        };
+
+        // Recomputes the per-category "— Total" rows and the "GRAND TOTAL" row from
+        // whatever is currently typed into the Weekly Stock Report's qty inputs — runs
+        // once on open (to reflect saved values) and again on every keystroke.
+        window.wsrRecalcTotals = function () {
+            const grand = {};
+            WSR_COLS.forEach(function (c) { grand[c.key] = 0; });
+            WSR_CATALOG.forEach(function (group, gi) {
+                const catTot = {};
+                WSR_COLS.forEach(function (c) { catTot[c.key] = 0; });
+                group.items.forEach(function (item, ii) {
+                    WSR_COLS.forEach(function (c) {
+                        const el = document.getElementById('wsr-in-' + gi + '-' + ii + '-' + c.key);
+                        const v = el ? (parseFloat(el.value) || 0) : 0;
+                        catTot[c.key] += v;
+                    });
+                });
+                WSR_COLS.forEach(function (c) {
+                    const cell = document.getElementById('wsr-cat-tot-' + gi + '-' + c.key);
+                    if (cell) cell.textContent = catTot[c.key];
+                    grand[c.key] += catTot[c.key];
+                });
+            });
+            WSR_COLS.forEach(function (c) {
+                const cell = document.getElementById('wsr-grand-tot-' + c.key);
+                if (cell) cell.textContent = grand[c.key];
+            });
         };
 
         // ---- Telephone Call Report: every "Call" tap from a shop's attendance
