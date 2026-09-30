@@ -22176,6 +22176,8 @@
 
         // Mobile numbers live on the shop master, not on the visit.
         function mobileFor(shop) {
+            const sv = asmShopByName(shop);
+            if (sv && sv.phone) return sv.phone;
             try {
                 const rec = (asmRetailers || []).find(function (r) { return r.name === shop; });
                 if (rec && rec.mobile) return rec.mobile;
@@ -22199,8 +22201,28 @@
             return (saved !== undefined && saved !== '') ? (parseFloat(saved) || 0) : computed;
         }
 
+        // The Sales Officer's report lists ONLY the shops the ASM added / assigned (from the server) — never
+        // leftover demo or hand-typed shops that may still sit in an old saved visit plan.
+        function asmShops() {
+            return (window.SOSales && SOSales.isSO()) ? SOSales.shops() : null;
+        }
+        function asmShopByName(name) {
+            const list = asmShops();
+            return list ? list.find(function (s) { return s.name === name; }) : null;
+        }
         function rows() {
-            return ((currentOfficer && currentOfficer.plannedVisitsList) || []).map(function (v) {
+            let visits = (currentOfficer && currentOfficer.plannedVisitsList) || [];
+            const allowed = asmShops();
+            if (allowed) {
+                const names = new Set(allowed.map(function (s) { return s.name; }));
+                visits = visits.filter(function (v) { return names.has(v.shop); });
+                allowed.forEach(function (s) {
+                    if (!visits.some(function (v) { return v.shop === s.name; })) {
+                        visits = visits.concat([{ shop: s.name, location: s.locality || s.city || '', status: 'Pending' }]);
+                    }
+                });
+            }
+            return visits.map(function (v) {
                 const saved = rowData(v.shop);
                 const q = qtyByColumn(v.order);
                 return {
@@ -22500,6 +22522,68 @@
                 '</tbody></table></div>';
         };
 
+        window.__dsrDp = function (v) { setHeaderField('dpName', v); };
+
+        // Shop search: typing filters the report's rows; picking a suggestion jumps to that shop's row.
+        let dsrHl = -1;
+        window.dsrShopSearch = function (q) {
+            const term = (q || '').trim().toLowerCase();
+            const trs = document.querySelectorAll('.dsr-main tbody tr[data-shop]');
+            const names = [];
+            trs.forEach(function (tr) {
+                const n = tr.getAttribute('data-shop') || '';
+                const hit = !term || n.toLowerCase().indexOf(term) !== -1;
+                tr.style.display = hit ? '' : 'none';
+                if (hit) names.push(n);
+            });
+            const box = el('dsr-shop-suggest');
+            if (!box) return;
+            dsrHl = -1;
+            if (!term) { box.classList.remove('open'); box.innerHTML = ''; return; }
+            box.innerHTML = names.length ? names.slice(0, 30).map(function (n) {
+                const sv = asmShopByName(n);
+                const sub = sv ? [sv.locality, sv.city].filter(Boolean).join(' \u00b7 ') : '';
+                return '<div class="dsr-search-item" data-name="' + esc(n) + '" onmousedown="event.preventDefault(); dsrShopPick(this.getAttribute(\'data-name\'))">' +
+                    esc(n) + (sub ? '<small>' + esc(sub) + '</small>' : '') + '</div>';
+            }).join('') : '<div class="dsr-search-item" style="cursor:default;color:#6B7A90;">No shop named \u201c' + esc(q) + '\u201d</div>';
+            box.classList.add('open');
+        };
+        window.dsrShopPick = function (name) {
+            const input = el('dsr-shop-search');
+            if (input) input.value = name;
+            const box = el('dsr-shop-suggest');
+            if (box) { box.classList.remove('open'); box.innerHTML = ''; }
+            document.querySelectorAll('.dsr-main tbody tr[data-shop]').forEach(function (tr) {
+                const on = tr.getAttribute('data-shop') === name;
+                tr.style.display = on ? '' : 'none';
+                if (on) {
+                    tr.classList.remove('dsr-flash'); void tr.offsetWidth; tr.classList.add('dsr-flash');
+                    tr.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                    const first = tr.querySelector('input, select');
+                    if (first) setTimeout(function () { first.focus({ preventScroll: true }); }, 350);
+                }
+            });
+        };
+        window.dsrShopKey = function (e) {
+            const items = Array.prototype.slice.call(document.querySelectorAll('#dsr-shop-suggest .dsr-search-item[data-name]'));
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                if (!items.length) return;
+                e.preventDefault();
+                dsrHl = (dsrHl + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+                items.forEach(function (it, i) { it.classList.toggle('hl', i === dsrHl); });
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                const it = items[dsrHl >= 0 ? dsrHl : 0];
+                if (it) dsrShopPick(it.getAttribute('data-name'));
+            } else if (e.key === 'Escape') {
+                e.target.value = ''; dsrShopSearch('');
+            }
+        };
+        document.addEventListener('click', function (e) {
+            const box = el('dsr-shop-suggest');
+            if (box && !e.target.closest('.dsr-search-wrap')) box.classList.remove('open');
+        });
+
         window.openDailyShopReport = function () {
             const list = rows();
             const h = headerData();
@@ -22508,9 +22592,23 @@
             mmTitleEl.innerHTML = 'Daily Shop Report';
 
             if (!list.length) {
-                mmBodyEl.innerHTML = '<div class="dsr-empty">No shops on today\'s plan yet.</div>';
+                const waiting = window.SOSales && SOSales.isSO() && !SOSales.shopsLoaded();
+                mmBodyEl.innerHTML = '<div class="dsr-empty">' + (waiting ? 'Loading your shops\u2026'
+                    : (window.SOSales && SOSales.isSO()
+                        ? 'No shops assigned to you yet. Your Area Sales Manager adds your shops \u2014 they appear here automatically.'
+                        : 'No shops on today\'s plan yet.')) + '</div>';
                 mmModalOverlay.classList.add('open');
                 return;
+            }
+            if (window.SOSales && !SOSales.state.dpLoaded) {
+                SOSales.loadDp().then(function () {
+                    const sel = el('dsr-h-dpName');
+                    if (sel && sel.tagName === 'SELECT') {
+                        const box = document.createElement('div');
+                        box.innerHTML = SOSales.dpSelectHtml('dsr-h-dpName', headerData().dpName || '', '__dsrDp');
+                        sel.parentNode.replaceChild(box.firstChild, sel);
+                    }
+                });
             }
 
             const totals = list.reduce(function (a, r) {
@@ -22527,7 +22625,9 @@
                 headLine('Name', 'name', officerName(), true) +
                 headLine('HQ', 'hq', h.hq || '', false, 'e.g. Madurai') +
                 headLine('Town', 'town', h.town || (currentOfficer && currentOfficer.area) || '', false, 'Enter town') +
-                headLine('DP Name', 'dpName', h.dpName || '', false, 'Distributor name') +
+                (window.SOSales
+                    ? '<div class="dsr-line"><label>DP Name</label>' + SOSales.dpSelectHtml('dsr-h-dpName', h.dpName || '', '__dsrDp') + '</div>'
+                    : headLine('DP Name', 'dpName', h.dpName || '', false, 'Distributor name')) +
                 headLine('Beat Name', 'beatName', h.beatName || '', false, 'Enter beat') +
                 headLine('Today Plan', 'todayPlan', h.todayPlan || String(list.length)) +
                 '  </div>' +
@@ -22562,6 +22662,11 @@
                 '  </div>' +
                 '</div>' +
 
+                '<div class="dsr-search-wrap">' +
+                '  <input type="search" id="dsr-shop-search" class="sos-search" placeholder="Search &amp; select a shop by name\u2026" autocomplete="off"' +
+                '   oninput="dsrShopSearch(this.value)" onfocus="dsrShopSearch(this.value)" onkeydown="dsrShopKey(event)">' +
+                '  <div class="dsr-search-list" id="dsr-shop-suggest"></div>' +
+                '</div>' +
                 '<div class="dsr-scroll"><table class="dsr-table dsr-main"><thead><tr>' +
                 '<th>S No</th><th>Shop Name</th><th>Type</th><th>Location</th><th>Mobile No</th>' +
                 COLS.map(function (c) { return '<th class="num">' + c.label + '</th>'; }).join('') +
@@ -22573,7 +22678,7 @@
                             ' oninput="dsrRowInput(\'' + esc(r.shop).replace(/'/g, "\\'") + '\', \'' + field + '\', this.value)">';
                     };
                     const sq = esc(r.shop).replace(/'/g, "\\'");
-                    return '<tr' + (r.visited ? '' : ' class="unvisited"') + '>' +
+                    return '<tr data-shop="' + esc(r.shop) + '"' + (r.visited ? '' : ' class="unvisited"') + '>' +
                         '<td data-label="S No" class="dsr-sno">' + (i + 1) + '</td>' +
                         '<td data-label="Shop" class="dsr-shop">' + esc(r.shop) + '</td>' +
                         '<td data-label="Type"><select class="dsr-cell-in" onchange="dsrRowInput(\'' + sq + '\', \'type\', this.value)">' +
@@ -22917,6 +23022,7 @@
             { cat: '230 GM PRODUCT', items: ['Almond (230GM)', 'Black Raisin (230GM)', 'Full Cashew (230GM)', 'Salt Pista (230GM)', 'Protein Beans (230GM)', 'Berry Mixture (230GM)', 'Mexician Bites (230GM)', 'Protien Booster (230GM)', 'Party Mixture (230GM)', 'Millet Mixture (150GM)', 'Fruit & Nut Muesli (230GM)', 'Mixed Dry Fruits (230GM)', 'Masala Veg (200GM)', 'Panchmeva Mix (230GM)', 'Granola (230GM)', 'Seed Mix (230GM)'] },
             { cat: 'SPICES', items: ['Jeera (100GM)', 'Fennel (100GM)', 'Fenugreek (100GM)', 'Mustard (100GM)', 'Ajwain (100GM)', 'Pepper (100GM)', 'Clove (50GM)', 'Poppy Seed (50GM)', 'Star Aniseed (50GM)', 'Cinnamon Stick (50GM)'] }
         ];
+        window.WSR_CATALOG = WSR_CATALOG;   // so-reports.js (server-backed stock report) uses the same product list
         const WSR_COLS = [
             { key: 'opening', label: 'Opening' }, { key: 'receipt', label: 'Receipt' },
             { key: 'closing1', label: 'Closing' }, { key: 'soSales', label: 'SO Sales' },
@@ -23762,6 +23868,8 @@
 <script src="api.js"></script>
 <script src="backend-bridge.js"></script>
 <script src="admin-console.js"></script>
+<script src="so-sales.js"></script>
+<script src="so-reports.js"></script>
 
 </body>
 </html>

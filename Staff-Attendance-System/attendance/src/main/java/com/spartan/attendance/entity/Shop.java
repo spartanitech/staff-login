@@ -40,6 +40,10 @@ public class Shop {
     @Column(length = 80)
     private String region;
 
+    /** City / area the shop is in (e.g. Chennai). Set by the ASM so the officer's list can be filtered by city. */
+    @Column(length = 80)
+    private String city;
+
     @Column(length = 255)
     private String address;
 
@@ -59,6 +63,11 @@ public class Shop {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "assigned_officer_id", foreignKey = @ForeignKey(name = "fk_shops_officer"))
     private User assignedOfficer;
+
+    /** Who added the shop: the Admin, or the Area Sales Manager (or other manager) who added it for their team. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "created_by_id", foreignKey = @ForeignKey(name = "fk_shops_created_by"))
+    private User createdBy;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 16)

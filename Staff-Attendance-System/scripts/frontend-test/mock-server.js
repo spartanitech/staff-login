@@ -72,7 +72,9 @@ function createMock() {
     };
     const scopeIds = u => (u.role === 'ADMIN' || u.role === 'OWNER') ? null : (u.role === 'SO' ? new Set([u.id]) : descendants(u.id));
 
-    const shopResp = sh => { const o = S.users.find(u => u.id === sh.assignedOfficerId); return { ...sh, assignedOfficerName: o ? o.name : null }; };
+    const shopResp = sh => { const o = S.users.find(u => u.id === sh.assignedOfficerId); const c = S.users.find(u => u.id === sh.createdById);
+        return { city: null, createdById: null, ...sh, assignedOfficerName: o ? o.name : null, createdByName: c ? c.name : null }; };
+    S.dp = []; S.stock = []; S.targets = []; S.seq.stock = 0;
 
     class ApiErr extends Error { constructor(status, code, message, details) { super(message); Object.assign(this, { status, code, details }); } }
     const bad = (code, msg, d) => new ApiErr(400, code, msg, d);
@@ -208,6 +210,99 @@ function createMock() {
         if (method === 'GET' && p === '/api/attendance/team') { need('ADMIN', 'OWNER', 'RSM', 'RM', 'ASM'); return [200, report(caller, q, caller.role === 'ADMIN')]; }
         if (method === 'GET' && p === '/api/attendance/summary') return [200, summary(caller, q)];
 
+
+        // ---- team shops / DP names / stock / targets (mirrors ShopService.team*, DpNameService, StockService, TargetService)
+        if (p === '/api/team/shops' || p.startsWith('/api/team/shops/')) {
+            need('ADMIN', 'OWNER', 'RSM', 'RM', 'ASM');
+            const ids = scopeIds(caller);
+            const visible = sh => !ids || sh.createdById === caller.id || (sh.assignedOfficerId != null && ids.has(sh.assignedOfficerId));
+            if (method === 'GET' && p === '/api/team/shops') return [200, S.shops.filter(visible).filter(x => !q.officerId || x.assignedOfficerId === Number(q.officerId)).sort((a, b) => a.name.localeCompare(b.name)).map(shopResp)];
+            const checkTeam = b => {
+                if (!b.name || !String(b.name).trim()) throw bad('VALIDATION_FAILED', 'Shop name is required');
+                if (typeof b.latitude !== 'number' || typeof b.longitude !== 'number') throw bad('VALIDATION_FAILED', 'latitude is required');
+                if (b.assignedOfficerId == null) throw bad('OFFICER_REQUIRED', 'Choose the Sales Officer this shop is for.');
+                if (ids && !ids.has(b.assignedOfficerId)) throw new ApiErr(403, 'OUT_OF_SCOPE', 'You can only assign shops to Sales Officers in your own team.');
+                const o = S.users.find(u => u.id === b.assignedOfficerId);
+                if (!o || o.role !== 'SO' || o.status !== 'ACTIVE') throw bad('INVALID_OFFICER', 'A shop can only be assigned to an active Sales Officer.');
+            };
+            const dup = (b, id) => { if (S.shops.some(x => x.id !== id && x.assignedOfficerId === b.assignedOfficerId && x.name.toLowerCase() === b.name.trim().toLowerCase())) throw new ApiErr(409, 'SHOP_NAME_TAKEN', `This Sales Officer already has a shop called '${b.name.trim()}'.`); };
+            const fields = b => ({ name: b.name.trim(), locality: b.locality || null, region: b.region || null, city: b.city || null, address: b.address || null, phone: b.phone || null,
+                latitude: b.latitude, longitude: b.longitude, allowedRadiusMeters: b.allowedRadiusMeters == null ? 50 : b.allowedRadiusMeters, assignedOfficerId: b.assignedOfficerId });
+            if (method === 'POST' && p === '/api/team/shops') {
+                checkTeam(body); dup(body);
+                let n = S.shops.length + 1, code; do { code = 'SHP' + String(n++).padStart(3, '0'); } while (S.shops.some(x => x.code === code));
+                const sh = { id: ++S.seq.shop, code, status: 'ACTIVE', createdById: caller.id, ...fields(body) };
+                S.shops.push(sh); return [201, shopResp(sh)];
+            }
+            if ((m = /^\/api\/team\/shops\/(\d+)$/.exec(p))) {
+                const sh = S.shops.find(x => x.id === Number(m[1])); if (!sh) throw new ApiErr(404, 'NOT_FOUND', 'Shop not found.');
+                if (!visible(sh)) throw new ApiErr(403, 'OUT_OF_SCOPE', 'You can only change shops of your own team.');
+                if (method === 'PUT') { checkTeam(body); dup(body, sh.id); Object.assign(sh, fields(body)); if (body.status) sh.status = body.status; return [200, shopResp(sh)]; }
+                if (method === 'DELETE') { S.shops.splice(S.shops.indexOf(sh), 1); return [204]; }
+            }
+        }
+        if (p === '/api/dp-names') {
+            if (method === 'GET') return [200, S.dp.slice().sort((a, b) => a.name.localeCompare(b.name))];
+            if (method === 'POST') {
+                const name = String((body && body.name) || '').trim().replace(/\s+/g, ' ');
+                if (!name) throw bad('VALIDATION_FAILED', 'DP name is required');
+                let d = S.dp.find(x => x.name.toLowerCase() === name.toLowerCase());
+                if (!d) { d = { id: S.dp.length + 1, name }; S.dp.push(d); }
+                return [200, d];
+            }
+        }
+        const visibleUser = id => { const ids = scopeIds(caller); if (ids && !ids.has(id)) throw new ApiErr(403, 'OUT_OF_SCOPE', 'You can only view people who report to you.'); };
+        const latestBefore = (oid, date) => { const out = {}; S.stock.filter(e => e.officerId === oid && e.date < date).sort((a, b) => a.date.localeCompare(b.date)).forEach(e => { out[e.product] = e; }); return out; };
+        if (method === 'GET' && p === '/api/stock') {
+            const who = q.officerId ? Number(q.officerId) : caller.id; visibleUser(who);
+            const to = q.to || todayIso(), from = q.from || addDays(to, -6);
+            return [200, S.stock.filter(e => e.officerId === who && e.date >= from && e.date <= to).sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id)];
+        }
+        if (method === 'GET' && p === '/api/stock/openings') {
+            const who = q.officerId ? Number(q.officerId) : caller.id; visibleUser(who);
+            const lb = latestBefore(who, q.date || todayIso()); const out = {}; Object.keys(lb).forEach(k => { out[k] = lb[k].closing; }); return [200, out];
+        }
+        if (method === 'PUT' && (m = /^\/api\/stock\/(\d{4}-\d{2}-\d{2})$/.exec(p))) {
+            const date = m[1]; if (date > todayIso()) throw bad('FUTURE_DATE', 'Stock cannot be entered for a future date.');
+            const prev = latestBefore(caller.id, date); const staged = [];
+            for (const r of body.rows) {
+                const product = r.product.trim(); const nz = v => v == null ? 0 : v;
+                for (const k of ['opening', 'receipt', 'soSales', 'dpSales']) if (r[k] != null && r[k] < 0) throw bad('VALIDATION_FAILED', k + ' cannot be negative');
+                const ex = S.stock.find(e => e.officerId === caller.id && e.date === date && e.product === product);
+                const opening = prev[product] ? prev[product].closing : (r.opening != null ? r.opening : (ex ? ex.opening : 0));
+                const rc = nz(r.receipt), so = nz(r.soSales), dp = nz(r.dpSales);
+                if (!ex && rc === 0 && so === 0 && dp === 0 && (prev[product] || opening === 0)) continue;
+                const closing = opening + rc - so - dp;
+                if (closing < 0) throw bad('STOCK_NEGATIVE', `${product}: SO Sales + DP Sales (${so + dp}) is more than Opening + Receipt (${opening + rc}).`);
+                staged.push({ ex, product, opening, rc, so, dp, closing, r });
+            }
+            staged.forEach(x => {
+                const e = x.ex || (S.stock.push({ id: ++S.seq.stock, officerId: caller.id, date, product: x.product, unitPrice: 0, dpName: null, category: null }), S.stock[S.stock.length - 1]);
+                Object.assign(e, { opening: x.opening, receipt: x.rc, soSales: x.so, dpSales: x.dp, closing: x.closing });
+                if (x.r.category) e.category = x.r.category; if (x.r.unitPrice != null) e.unitPrice = x.r.unitPrice; if (body.dpName) e.dpName = body.dpName;
+                let carry = x.closing;
+                S.stock.filter(l => l.officerId === caller.id && l.product === x.product && l.date > date).sort((a, b) => a.date.localeCompare(b.date))
+                    .forEach(l => { l.opening = carry; l.closing = carry + l.receipt - l.soSales - l.dpSales; carry = l.closing; });
+            });
+            return [200, S.stock.filter(e => e.officerId === caller.id && e.date === date)];
+        }
+        const curMonth = () => todayIso().slice(0, 7);
+        const tResp = t => { const o = S.users.find(u => u.id === t.officerId), b = S.users.find(u => u.id === t.setById); return { officerId: t.officerId, officerName: o.name, month: t.month, amount: t.amount, setByName: b ? b.name : null }; };
+        if (method === 'GET' && p === '/api/targets') {
+            const who = q.officerId ? Number(q.officerId) : caller.id; visibleUser(who); const month = q.month || curMonth();
+            const t = S.targets.find(x => x.officerId === who && x.month === month);
+            return [200, t ? tResp(t) : { officerId: who, officerName: S.users.find(u => u.id === who).name, month, amount: 0, setByName: null }];
+        }
+        if (method === 'GET' && p === '/api/targets/team') { const ids = scopeIds(caller); const month = q.month || curMonth(); return [200, S.targets.filter(t => t.month === month && (!ids || ids.has(t.officerId))).map(tResp)]; }
+        if (method === 'PUT' && p === '/api/targets') {
+            const global = caller.role === 'ADMIN' || caller.role === 'OWNER';
+            if (!global && !['RSM', 'RM', 'ASM'].includes(caller.role)) throw new ApiErr(403, 'NOT_A_MANAGER', 'Only your manager can set your target.');
+            if (!global && caller.id === body.officerId) throw new ApiErr(403, 'OWN_TARGET', 'Your own target is set by your manager.');
+            visibleUser(body.officerId);
+            let t = S.targets.find(x => x.officerId === body.officerId && x.month === body.month);
+            if (!t) { t = { officerId: body.officerId, month: body.month }; S.targets.push(t); }
+            t.amount = body.amount; t.setById = caller.id; return [200, tResp(t)];
+        }
         if (p.startsWith('/api/admin/')) need('ADMIN');
         if (method === 'GET' && p === '/api/admin/attendance') return [200, report(caller, q, true)];
         if (method === 'GET' && p === '/api/admin/settings') return [200, settings];

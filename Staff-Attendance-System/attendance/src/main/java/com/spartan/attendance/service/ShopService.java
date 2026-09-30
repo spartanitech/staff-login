@@ -35,6 +35,7 @@ public class ShopService {
     private final AttendanceRepository attendanceRepository;
     private final AuditService auditService;
     private final AppProperties props;
+    private final ScopeService scopeService;
 
     @Transactional(readOnly = true)
     public List<ShopResponse> list(boolean includeInactive, Long officerId) {
@@ -70,12 +71,14 @@ public class ShopService {
                 .name(req.name().trim())
                 .locality(clean(req.locality()))
                 .region(clean(req.region()))
+                .city(clean(req.city()))
                 .address(clean(req.address()))
                 .phone(clean(req.phone()))
                 .latitude(req.latitude())
                 .longitude(req.longitude())
                 .allowedRadiusMeters(radius(req))
                 .assignedOfficer(officer)
+                .createdBy(userRepository.findById(admin.getId()).orElse(null))
                 .status(req.status() == null ? Status.ACTIVE : req.status())
                 .build());
         auditService.log(admin.getId(), AuditAction.SHOP_CREATE,
@@ -96,6 +99,9 @@ public class ShopService {
         s.setName(req.name().trim());
         s.setLocality(clean(req.locality()));
         s.setRegion(clean(req.region()));
+        if (req.city() != null) {            // older clients (admin console) don't send a city - keep what is there
+            s.setCity(clean(req.city()));
+        }
         s.setAddress(clean(req.address()));
         s.setPhone(clean(req.phone()));
         s.setLatitude(req.latitude());
@@ -133,6 +139,94 @@ public class ShopService {
         auditService.log(admin.getId(), AuditAction.SHOP_DELETE,
                 "Deleted shop " + s.getCode() + " '" + s.getName() + "' (" + cleared + " past attendance record(s) kept, no longer linked to a shop)", info);
         repository.delete(s);
+    }
+
+    // ------------------------------------------------------------------ team shops (ASM / RM / RSM)
+    // The Area Sales Manager adds the shops their Sales Officers work. A manager only ever sees and changes shops that
+    // are assigned to a Sales Officer in their own reporting tree (or that they added themselves); ADMIN/OWNER see all.
+
+    /** Shops assigned to anyone in the caller's scope, plus any the caller added themselves (even if unassigned). */
+    @Transactional(readOnly = true)
+    public List<ShopResponse> teamList(AppUserDetails caller, Long officerId) {
+        ScopeService.Scope scope = scopeService.scopeOf(caller);
+        if (officerId != null) {
+            scopeService.assertVisible(caller, officerId);
+        }
+        Specification<Shop> everything = (root, q, cb) -> cb.conjunction();
+        return repository.findAll(everything, Sort.by("name")).stream()
+                .filter(s -> teamVisible(caller, scope, s))
+                .filter(s -> officerId == null
+                        || (s.getAssignedOfficer() != null && officerId.equals(s.getAssignedOfficer().getId())))
+                .map(ShopResponse::from)
+                .toList();
+    }
+
+    @Transactional
+    public ShopResponse teamCreate(AppUserDetails caller, ShopRequest req, RequestInfo info) {
+        requireTeamOfficer(caller, req.assignedOfficerId());
+        rejectDuplicateName(req.name(), req.assignedOfficerId(), null);
+        return create(caller, stripCode(req), info);
+    }
+
+    @Transactional
+    public ShopResponse teamUpdate(AppUserDetails caller, Long id, ShopRequest req, RequestInfo info) {
+        Shop s = find(id);
+        if (!teamVisible(caller, scopeService.scopeOf(caller), s)) {
+            throw ApiException.forbidden("OUT_OF_SCOPE", "You can only change shops of your own team.");
+        }
+        requireTeamOfficer(caller, req.assignedOfficerId());
+        rejectDuplicateName(req.name(), req.assignedOfficerId(), id);
+        return update(caller, id, stripCode(req), info);
+    }
+
+    @Transactional
+    public void teamDelete(AppUserDetails caller, Long id, RequestInfo info) {
+        Shop s = find(id);
+        if (!teamVisible(caller, scopeService.scopeOf(caller), s)) {
+            throw ApiException.forbidden("OUT_OF_SCOPE", "You can only remove shops of your own team.");
+        }
+        delete(caller, id, info);
+    }
+
+    private boolean teamVisible(AppUserDetails caller, ScopeService.Scope scope, Shop s) {
+        if (scope.all()) {
+            return true;
+        }
+        if (s.getCreatedBy() != null && caller.getId().equals(s.getCreatedBy().getId())) {
+            return true;
+        }
+        return s.getAssignedOfficer() != null && scope.contains(s.getAssignedOfficer().getId());
+    }
+
+    /** A manager must hand the shop to one of their own Sales Officers (ADMIN/OWNER may leave it unassigned). */
+    private void requireTeamOfficer(AppUserDetails caller, Long officerId) {
+        if (officerId == null) {
+            if (caller.getRole().hasGlobalScope()) {
+                return;
+            }
+            throw ApiException.badRequest("OFFICER_REQUIRED", "Choose the Sales Officer this shop is for.");
+        }
+        if (!scopeService.scopeOf(caller).contains(officerId)) {
+            throw ApiException.forbidden("OUT_OF_SCOPE", "You can only assign shops to Sales Officers in your own team.");
+        }
+    }
+
+    private void rejectDuplicateName(String name, Long officerId, Long id) {
+        if (name == null || officerId == null) {
+            return;
+        }
+        boolean taken = id == null
+                ? repository.existsByNameIgnoreCaseAndAssignedOfficerId(name.trim(), officerId)
+                : repository.existsByNameIgnoreCaseAndAssignedOfficerIdAndIdNot(name.trim(), officerId, id);
+        if (taken) {
+            throw ApiException.conflict("SHOP_NAME_TAKEN", "This Sales Officer already has a shop called '" + name.trim() + "'.");
+        }
+    }
+
+    /** Managers never pick shop codes; the server generates them. */
+    private static ShopRequest stripCode(ShopRequest r) {
+        return new ShopRequest(null, r.name(), r.locality(), r.region(), r.address(), r.phone(), r.latitude(), r.longitude(),
+                r.allowedRadiusMeters(), r.assignedOfficerId(), r.status(), r.city());
     }
 
     private Shop find(Long id) {

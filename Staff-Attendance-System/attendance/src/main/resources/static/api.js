@@ -282,7 +282,29 @@
         updateWorkLocation: function (id, body) { return request('PUT', '/api/work-locations/' + id, { body: body }); },
         setWorkLocationStatus: function (id, status) {
             return request('PATCH', '/api/work-locations/' + id + '/status', { body: { status: status } });
-        }
+        },
+
+        // team shops (ASM / RM / Marketing Manager add shops for their own Sales Officers)
+        teamShops: function (officerId) { return request('GET', '/api/team/shops', { query: { officerId: officerId || '' } }); },
+        createTeamShop: function (body) { return request('POST', '/api/team/shops', { body: body }); },
+        updateTeamShop: function (id, body) { return request('PUT', '/api/team/shops/' + id, { body: body }); },
+        deleteTeamShop: function (id) { return request('DELETE', '/api/team/shops/' + id); },
+
+        // DP (distributor) names
+        dpNames: function () { return request('GET', '/api/dp-names'); },
+        addDpName: function (name) { return request('POST', '/api/dp-names', { body: { name: name } }); },
+
+        // daily stock: closing = opening + receipt - SO sales - DP sales; next day's opening = previous closing
+        stock: function (q) { return request('GET', '/api/stock', { query: q }); },
+        stockOpenings: function (date, officerId) {
+            return request('GET', '/api/stock/openings', { query: { date: date, officerId: officerId || '' } });
+        },
+        saveStockDay: function (date, body) { return request('PUT', '/api/stock/' + encodeURIComponent(date), { body: body }); },
+
+        // monthly targets (set by the manager)
+        target: function (q) { return request('GET', '/api/targets', { query: q }); },
+        teamTargets: function (month) { return request('GET', '/api/targets/team', { query: { month: month || '' } }); },
+        setTarget: function (body) { return request('PUT', '/api/targets', { body: body }); }
     };
 
     function withDevice(gps) {

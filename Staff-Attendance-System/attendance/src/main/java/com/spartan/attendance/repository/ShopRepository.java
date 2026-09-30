@@ -14,7 +14,12 @@ import org.springframework.data.repository.query.Param;
 
 public interface ShopRepository extends JpaRepository<Shop, Long>, JpaSpecificationExecutor<Shop> {
 
+    @EntityGraph(attributePaths = {"assignedOfficer", "createdBy"})
     List<Shop> findByAssignedOfficerIdAndStatusOrderByNameAsc(Long officerId, Status status);
+
+    boolean existsByNameIgnoreCaseAndAssignedOfficerId(String name, Long officerId);
+
+    boolean existsByNameIgnoreCaseAndAssignedOfficerIdAndIdNot(String name, Long officerId, Long id);
 
     boolean existsByCodeIgnoreCase(String code);
 
@@ -22,7 +27,7 @@ public interface ShopRepository extends JpaRepository<Shop, Long>, JpaSpecificat
 
     /** Same as the inherited findAll(spec, sort) but loads the assigned officer in the same query (no N+1). */
     @Override
-    @EntityGraph(attributePaths = {"assignedOfficer"})
+    @EntityGraph(attributePaths = {"assignedOfficer", "createdBy"})
     List<Shop> findAll(Specification<Shop> spec, Sort sort);
 
     /** Used when deleting a Sales Officer: their shops stay, just become unassigned rather than blocking the delete. */

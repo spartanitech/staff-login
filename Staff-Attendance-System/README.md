@@ -136,3 +136,27 @@ Browser tests: `cd scripts/frontend-test && npm install && npm test` (jsdom, 109
 flow with GPS/accuracy/photo validation, the Admin Shops panel, and staff/shop deletion) and `cd scripts/ui-test && npm install && npm test`
 (real headless Chromium, 25 checks: form layout on desktop/phone, typing, drag-select, create/delete staff, delete a
 shop with a real native confirm() dialog, and a real `page.setGeolocation()` + real file-upload shop check-in). Both run against a mock of the API.
+
+
+## Sales Officer dashboard: ASM shops, DP names, daily stock, targets (server-backed)
+Everything below is stored in MySQL (Hibernate `ddl-auto=update` creates the new tables `dp_names`, `stock_entries`,
+`sales_targets` and the new `shops.city` / `shops.created_by_id` columns on the next start), so it is the same on every device.
+
+* **No hard-coded shops.** The generated demo shops are emptied in the browser. A Sales Officer sees **only** the shops
+  returned by `GET /api/shops/mine` – i.e. the shops the ASM (or Admin) assigned to them – in *My Area & Shops* (with a
+  search-by-name box), the *Daily Shop Report* (with a shop search box) and shop check-in. The SO's own "Add shop" buttons are gone.
+* **ASM → Team Shops** (new ASM menu item): add / edit / remove shops for the Sales Officers in their own team
+  (`/api/team/shops`, scope-checked on the server: a manager can only touch shops of SOs in their reporting tree).
+  A shop needs a location (paste `lat, lng` from Google Maps, or tap "Use my location" at the shop) because check-in is geofenced.
+* **DP Name** in the Daily Shop Report and Weekly Stock Report is a dropdown of saved names with "+ Add new DP name…" (`/api/dp-names`).
+* **Weekly Stock Report**: pick a date and a category (DRY FRUITS first). Columns: No, Product, Opening, Receipt, Closing,
+  SO Sales, DP Sales. `Closing = Opening + Receipt − SO Sales − DP Sales` is calculated live and by the server; the next day's
+  Opening is always the previous day's Closing (typed only for a product's very first day). Editing an earlier day re-flows
+  every later day. `PUT /api/stock/{date}`, `GET /api/stock`, `GET /api/stock/openings`.
+* **Targets**: the ASM sets each SO's monthly target in *Targets vs Sales* (`PUT /api/targets`). The SO's *My Targets* shows
+  Target vs Actual (SO Sales, DP Sales, Total, % achieved) plus Daily, Weekly and Product-wise SO/DP sales graphs.
+  Sales value = quantity × product price from the order price list.
+* **Messages** screen is responsive (full-screen on phones, stacked send form, no sideways scrolling).
+* Browser test: `scripts/ui-test/so-sales-e2e.js` (33 checks against the mock API).
+* Note: `SEED_DEMO_USERS=true` (the non-prod default) still seeds 7 demo shops into the database on an empty `shops` table;
+  production (`SPRING_PROFILES_ACTIVE=prod`) does not. Delete any leftover demo shops from Admin → Shops.
