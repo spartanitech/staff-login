@@ -31,7 +31,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api")
 @RequiredArgsConstructor
-@Tag(name = "Shops", description = "Shops Sales Officers mark attendance at. Managed by the Admin; a Sales Officer only sees the shops assigned to them.")
+@Tag(name = "Shops", description = "Shops Sales Officers mark attendance at. Added by the Admin, the ASM (Team shops) or the Sales Officer themselves; a Sales Officer only sees the shops assigned to them.")
 public class ShopController {
 
     private final ShopService service;
@@ -41,6 +41,16 @@ public class ShopController {
     @GetMapping("/shops/mine")
     public List<ShopResponse> mine(@AuthenticationPrincipal AppUserDetails caller) {
         return service.mine(caller);
+    }
+
+    @Operation(summary = "Add a shop I work at (Sales Officer). It is pinned at my current GPS position and assigned to me, "
+            + "so I can check in there straight away and my ASM sees it in Team Shops.")
+    @PreAuthorize("hasRole('SO')")
+    @PostMapping("/shops/mine")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ShopResponse addMine(@AuthenticationPrincipal AppUserDetails caller, @Valid @RequestBody ShopRequest request,
+                                HttpServletRequest http) {
+        return service.createOwn(caller, request, RequestInfo.from(http));
     }
 
     @Operation(summary = "All shops, optionally only one officer's (ADMIN)")

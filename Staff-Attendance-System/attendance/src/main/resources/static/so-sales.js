@@ -2,13 +2,14 @@
  * so-sales.js — Sales Officer dashboard data that lives on the server (MySQL), so it is the same on every device.
  *
  *   ASM adds shops (Team Shops)  ->  Sales Officer: My Area & Shops, Daily Shop Report, shop check-in
+ *   SO adds own shop (GPS)       ->  same list (POST /api/shops/mine, assigned to the SO) + visible to the ASM
  *   ASM sets monthly target      ->  Sales Officer: My Targets -> Target vs Actual graph
  *   Sales Officer daily stock    ->  Weekly Stock Report: Opening / Receipt / Closing / SO Sales / DP Sales
  *                                    Closing = Opening + Receipt - SO Sales - DP Sales, next day's Opening = Closing
  *   DP names                     ->  shared dropdown (anyone can add a new name)
  *
  * No shop is hard-coded any more: the generated demo shops are emptied on load, and a Sales Officer only ever sees the
- * shops returned by GET /api/shops/mine (the ones the ASM assigned to them).
+ * shops returned by GET /api/shops/mine (added by their ASM or by themselves, always on the server).
  *
  * Loaded after api.js, backend-bridge.js and admin-console.js. It overrides a few global functions of index.html
  * (getMyShopsForOfficer, showMyAreaShops, openSOWeeklyReport, ...) the same way backend-bridge.js does.
@@ -134,7 +135,7 @@
             '.wsr2-cat{flex-shrink:0;padding:7px 12px;border-radius:999px;border:1px solid #D3E2F5;background:#fff;font-size:11.5px;font-weight:700;color:#04344C;cursor:pointer;font-family:inherit;white-space:nowrap}',
             '.wsr2-cat.on{background:#04344C;border-color:#04344C;color:#fff}',
             '.wsr2-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #E4EEF9;border-radius:12px}',
-            '.wsr2-table{width:100%;border-collapse:collapse;min-width:640px;font-size:12.5px}',
+            '.wsr2-table{width:100%;border-collapse:collapse;min-width:780px;font-size:12.5px}',
             '.wsr2-table th{background:#F0F5FB;color:#04344C;font-size:11px;text-transform:uppercase;letter-spacing:.03em;padding:9px 8px;text-align:left;white-space:nowrap}',
             '.wsr2-table th.n,.wsr2-table td.n{text-align:right}.wsr2-table td{padding:6px 8px;border-top:1px solid #F0F4FA;color:#04344C}',
             '.wsr2-table input{width:78px;box-sizing:border-box;padding:7px 8px;border:1px solid #D3E2F5;border-radius:7px;text-align:right;font-family:inherit;font-size:13px;color:#04344C}',
@@ -172,8 +173,6 @@
             '.sos-tbl td{padding:9px 8px;border-top:1px solid #F0F4FA;color:#04344C;vertical-align:middle}',
             '@media (max-width:640px){.sos-tbl thead{display:none}.sos-tbl tr{display:block;border-top:1px solid #E4EEF9;padding:8px 0}.sos-tbl td{display:flex;justify-content:space-between;gap:10px;border:0;padding:4px 6px}',
             '  .sos-tbl td[data-l]::before{content:attr(data-l);font-size:10.5px;font-weight:700;color:#5C6E88;text-transform:uppercase}.sos-shop{flex-wrap:wrap}.sos-shop-act{width:100%;justify-content:flex-end}}',
-            // shops added only by the ASM: hide every "Add shop" control on the Sales Officer's own screens
-            'body.sos-so .so-addshop-btn{display:none!important}',
             // ---- Messages: responsive on desktop, tablet and phone ----
             '#role-msg-modal-overlay{padding:16px;box-sizing:border-box}',
             '#role-msg-modal-overlay .modal-card{width:100%;max-width:820px;box-sizing:border-box;max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);display:flex;flex-direction:column;overflow-y:auto}',
@@ -297,7 +296,7 @@
         var cnt = $('sos-shop-count');
         if (cnt) cnt.textContent = q ? hits.length + ' of ' + S.shops.length + ' shops' : S.shops.length + ' shops';
         if (!S.shops.length) {
-            box.innerHTML = '<div class="sos-empty">No shops assigned to you yet.<br>Your Area Sales Manager adds your shops — they appear here automatically.</div>';
+            box.innerHTML = '<div class="sos-empty">No shops yet.<br>Tap <b>➕ Add shop</b> while standing at a shop, or ask your Area Sales Manager to add it.</div>';
             return;
         }
         box.innerHTML = hits.length ? hits.map(shopRowHtml).join('')
@@ -307,8 +306,9 @@
     function myShopsSectionHtml() {
         return '<div class="sos-card" id="sos-myshops">' +
             '<div class="sos-head"><div><div class="sos-title">🏬 My Shops</div>' +
-            '<div class="sos-sub">Only the shops your Area Sales Manager added / assigned to you</div></div>' +
-            '<button class="sos-btn" onclick="SOSales.reloadShops()">↻ Refresh</button></div>' +
+            '<div class="sos-sub">Shops assigned to you — added by you or your Area Sales Manager</div></div>' +
+            '<span style="display:flex;gap:6px"><button class="sos-btn pri" onclick="SOSales.addShop()">➕ Add shop</button>' +
+            '<button class="sos-btn" onclick="SOSales.reloadShops()">↻ Refresh</button></span></div>' +
             '<input type="search" class="sos-search" id="sos-shop-search" placeholder="Search shop by name…" autocomplete="off" oninput="SOSales.filterShops(this.value)">' +
             '<div class="sos-count" id="sos-shop-count"></div>' +
             '<div id="sos-shop-list"></div></div>';
@@ -336,21 +336,98 @@
             global.showMyAreaShops = a;
         }
 
-        // The Sales Officer no longer adds shops — only the ASM does.
+        // The Sales Officer adds a shop while standing at it: it is saved on the server with their GPS position and
+        // assigned to them, so it shows up in shop check-in (attendance) and in their ASM's Team Shops straight away.
         var origAdd = global.openSOAddShop;
         global.openSOAddShop = function () {
             if (!isSO()) return typeof origAdd === 'function' ? origAdd.apply(this, arguments) : undefined;
-            toast('Shops are added by your Area Sales Manager. Ask your ASM to add this shop for you.', true);
+            openAddShopForm();
         };
-        global.soAddOwnShop = function () {
-            toast('Shops are added by your Area Sales Manager.', true);
+        global.soAddOwnShop = function () { openAddShopForm(); };
+    }
+
+    // ------------------------------------------------------------------ Sales Officer: add my shop (server + GPS)
+    var MAX_ADD_ACCURACY_M = 100;
+
+    function openAddShopForm() {
+        var m = mm();
+        if (!m.body) return;
+        if (m.tabs) m.tabs.innerHTML = '';
+        m.title.textContent = '➕ Add New Shop';
+        var city = (S.user && S.user.area) || (officerRec() && officerRec().workArea) || '';
+        m.body.innerHTML = '<div class="sos-card">' +
+            '<div class="sos-sub" style="margin-bottom:10px">Stand <b>at the shop</b> and save — its location is taken from your GPS. ' +
+            'The shop is added to your list, you can check in there for attendance, and your ASM sees it too.</div>' +
+            '<div class="sos-form">' +
+            '<label>Shop name *<input id="sos-new-name" maxlength="150" autocomplete="off"></label>' +
+            '<label>Locality / street<input id="sos-new-loc" maxlength="120"></label>' +
+            '<label>City<input id="sos-new-city" maxlength="80" value="' + esc(city) + '"></label>' +
+            '<label>Region<select id="sos-new-region"><option>North</option><option>South</option><option>East</option><option>West</option></select></label>' +
+            '<label>Phone<input id="sos-new-phone" maxlength="20" inputmode="tel"></label>' +
+            '</div>' +
+            '<div class="wsr2-actions"><button class="btn-primary" id="sos-new-save" onclick="SOSales.saveNewShop()">📍 Save at my current location</button>' +
+            '<button class="btn-outline" onclick="showMyAreaShops()">Cancel</button></div>' +
+            '<div id="sos-new-msg" class="sos-msg"></div></div>';
+        m.overlay.classList.add('open');
+        var n = $('sos-new-name'); if (n) n.focus();
+    }
+
+    function currentPosition() {
+        return new Promise(function (resolve, reject) {
+            if (!global.navigator || !navigator.geolocation) { reject(new Error('This browser cannot read GPS.')); return; }
+            navigator.geolocation.getCurrentPosition(resolve, function (err) {
+                reject(new Error(err && err.code === 1 ? 'Location permission is blocked. Allow location for this site and try again.'
+                    : 'Could not read your GPS position. Move to open sky and try again.'));
+            }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+        });
+    }
+
+    async function saveNewShop() {
+        var msg = $('sos-new-msg'), btn = $('sos-new-save');
+        function say(t, bad) { if (msg) { msg.className = 'sos-msg ' + (bad ? 'bad' : 'ok'); msg.textContent = t; } }
+        var name = (($('sos-new-name') || {}).value || '').trim();
+        if (!name) { say('Enter the shop name.', true); var n = $('sos-new-name'); if (n) n.focus(); return; }
+        if (S.shops.some(function (s) { return (s.name || '').toLowerCase() === name.toLowerCase(); })) {
+            say('You already have a shop called "' + name + '".', true); return;
+        }
+        if (btn) btn.disabled = true;
+        say('Reading your GPS position…');
+        var pos;
+        try { pos = await currentPosition(); }
+        catch (e) { if (btn) btn.disabled = false; say(e.message, true); return; }
+        var acc = Math.round(pos.coords.accuracy || 9999);
+        if (acc > MAX_ADD_ACCURACY_M) {
+            if (btn) btn.disabled = false;
+            say('GPS is not accurate enough yet (±' + acc + ' m, need ±' + MAX_ADD_ACCURACY_M + ' m or better). Wait a few seconds and try again.', true);
+            return;
+        }
+        var body = {
+            name: name,
+            locality: (($('sos-new-loc') || {}).value || '').trim() || null,
+            city: (($('sos-new-city') || {}).value || '').trim() || null,
+            region: ($('sos-new-region') || {}).value || null,
+            phone: (($('sos-new-phone') || {}).value || '').trim() || null,
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude
         };
+        say('Saving…');
+        try {
+            await api().createMyShop(body);
+        } catch (e) {
+            if (btn) btn.disabled = false;
+            say(errText(e), true);
+            return;
+        }
+        toast('Shop "' + name + '" added — you can check in there now');
+        S.shopsLoaded = false;
+        await loadSOShops();
+        if (typeof global.showMyAreaShops === 'function') global.showMyAreaShops();
     }
 
     function decorateMyArea() {
         var body = mm().body;
         if (!body) return;
-        // remove the officer's own "Add a New Shop" box (Regions level)
+        // remove the old "Add a New Shop" box (Regions level) - it only saved in this browser; the ➕ Add New Shop form saves on the server
         var addInput = $('so-my-newshop-name');
         if (addInput) {
             var box = addInput.closest('div[style*="margin-top:14px"]') || addInput.parentNode.parentNode;
@@ -416,6 +493,8 @@
         state: S,
         isSO: isSO,
         filterShops: function (q) { renderMyShopList(q); },
+        addShop: function () { openAddShopForm(); },
+        saveNewShop: saveNewShop,
         reloadShops: function () { S.shopsLoaded = false; renderMyShopList(''); return loadSOShops(); },
         shops: function () { return S.shops.slice(); },
         shopsLoaded: function () { return S.shopsLoaded; },

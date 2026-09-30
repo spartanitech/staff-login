@@ -237,6 +237,8 @@
 
         // Sales Officer: shops assigned to me, check-in at a shop (multipart: shopId, latitude, longitude, accuracy, photo)
         myShops: function () { return request('GET', '/api/shops/mine'); },
+        // Sales Officer adds a shop they work at (pinned at their GPS position, assigned to them)
+        createMyShop: function (body) { return request('POST', '/api/shops/mine', { body: body }); },
         shopCheckIn: function (form) { return request('POST', '/api/attendance/shop-check-in', { form: form }); },
         // the live photo of a check-in, as a Blob (the endpoint needs the Authorization header, so an <img src> cannot fetch it)
         attendancePhoto: async function (id) {

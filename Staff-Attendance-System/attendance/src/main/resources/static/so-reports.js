@@ -323,8 +323,11 @@
         var receipt = d.receipt != null ? d.receipt : (e ? e.receipt : 0);
         var so = d.soSales != null ? d.soSales : (e ? e.soSales : 0);
         var dp = d.dpSales != null ? d.dpSales : (e ? e.dpSales : 0);
-        return { opening: opening, openingEditable: !hasPrev && !W.readOnly, receipt: receipt, soSales: so, dpSales: dp,
-            closing: opening + receipt - so - dp, saved: !!e };
+        // Total Stock = Opening + Receipt, Total Sales = SO Sales + DP Sales, Closing = Total Stock - Total Sales
+        // (the server does the same sum and is the one that saves it)
+        var totalStock = opening + receipt, totalSales = so + dp;
+        return { opening: opening, openingEditable: !hasPrev && !W.readOnly, receipt: receipt, totalStock: totalStock,
+            soSales: so, dpSales: dp, totalSales: totalSales, closing: totalStock - totalSales, saved: !!e };
     }
 
     function cellIn(p, field, v) {
@@ -333,9 +336,13 @@
             ' data-p="' + esc(p) + '" data-f="' + field + '" oninput="SOReports.wsrInput(this)">';
     }
 
+    var TOT_KEYS = ['opening', 'receipt', 'totalStock', 'soSales', 'dpSales', 'totalSales', 'closing'];
+    var TOT_LABELS = { opening: 'Opening', receipt: 'Receipt', totalStock: 'Total Stock', soSales: 'SO Sales', dpSales: 'DP Sales',
+        totalSales: 'Total Sales', closing: 'Closing' };
+
     function wsrTableHtml() {
         var g = catalog()[W.cat] || catalog()[0];
-        var tot = { opening: 0, receipt: 0, closing: 0, soSales: 0, dpSales: 0 };
+        var tot = { opening: 0, receipt: 0, totalStock: 0, soSales: 0, dpSales: 0, totalSales: 0, closing: 0 };
         var rows = g.items.map(function (p, i) {
             var r = rowState(p);
             Object.keys(tot).forEach(function (k) { tot[k] += r[k]; });
@@ -345,18 +352,19 @@
                 '<td class="n" data-l="Opening">' + (r.openingEditable ? cellIn(p, 'opening', r.opening)
                     : '<span class="wsr2-auto" title="Previous day\'s closing (automatic)">' + num(r.opening) + '</span>') + '</td>' +
                 '<td class="n" data-l="Receipt">' + cellIn(p, 'receipt', r.receipt) + '</td>' +
-                '<td class="n" data-l="Closing"><span class="wsr2-auto wsr2-closing' + (r.closing < 0 ? ' neg' : '') + '" data-closing="' + esc(p) + '">' + num(r.closing) + '</span></td>' +
+                '<td class="n" data-l="Total Stock"><span class="wsr2-auto" data-tstock="' + esc(p) + '">' + num(r.totalStock) + '</span></td>' +
                 '<td class="n" data-l="SO Sales">' + cellIn(p, 'soSales', r.soSales) + '</td>' +
                 '<td class="n" data-l="DP Sales">' + cellIn(p, 'dpSales', r.dpSales) + '</td>' +
+                '<td class="n" data-l="Total Sales"><span class="wsr2-auto" data-tsales="' + esc(p) + '">' + num(r.totalSales) + '</span></td>' +
+                '<td class="n" data-l="Closing"><span class="wsr2-auto wsr2-closing' + (r.closing < 0 ? ' neg' : '') + '" data-closing="' + esc(p) + '">' + num(r.closing) + '</span></td>' +
                 '</tr>';
         }).join('');
         return '<div class="wsr2-scroll"><table class="wsr2-table"><thead><tr>' +
-            '<th>No.</th><th>Product</th><th class="n">Opening</th><th class="n">Receipt</th><th class="n">Closing</th><th class="n">SO Sales</th><th class="n">DP Sales</th>' +
+            '<th>No.</th><th>Product</th><th class="n">Opening</th><th class="n">Receipt</th><th class="n">Total Stock</th><th class="n">SO Sales</th><th class="n">DP Sales</th><th class="n">Total Sales</th><th class="n">Closing</th>' +
             '</tr></thead><tbody>' + rows + '</tbody><tfoot><tr id="wsr2-tot">' +
             '<td class="wsr2-no"></td><td class="wsr2-prod">' + esc(g.cat) + ' — Total</td>' +
-            '<td class="n" data-l="Opening">' + num(tot.opening) + '</td><td class="n" data-l="Receipt">' + num(tot.receipt) + '</td>' +
-            '<td class="n" data-l="Closing">' + num(tot.closing) + '</td><td class="n" data-l="SO Sales">' + num(tot.soSales) + '</td>' +
-            '<td class="n" data-l="DP Sales">' + num(tot.dpSales) + '</td></tr></tfoot></table></div>';
+            TOT_KEYS.map(function (k) { return '<td class="n" data-l="' + TOT_LABELS[k] + '">' + num(tot[k]) + '</td>'; }).join('') +
+            '</tr></tfoot></table></div>';
     }
 
     function weekSummary() {
@@ -367,6 +375,8 @@
                 var open = Object.prototype.hasOwnProperty.call(W.weekOpenings, p) ? W.weekOpenings[p] : (list[0] ? list[0].opening : 0);
                 var r = { opening: open, receipt: 0, soSales: 0, dpSales: 0, closing: list.length ? list[list.length - 1].closing : open };
                 list.forEach(function (e) { r.receipt += e.receipt; r.soSales += e.soSales; r.dpSales += e.dpSales; });
+                r.totalStock = r.opening + r.receipt;
+                r.totalSales = r.soSales + r.dpSales;
                 out[p] = r;
             });
         });
@@ -377,13 +387,11 @@
         var ws = weekSummary(), g = catalog()[W.cat] || catalog()[0];
         return '<div class="sos-card"><div class="sos-head"><div><div class="sos-title">🗓️ This week — ' + esc(g.cat) + '</div>' +
             '<div class="sos-sub">' + H.fmtDay(ws.mon) + ' – ' + H.fmtDay(ws.sun) + ' · opening of Monday, totals of the week, latest closing</div></div></div>' +
-            '<div class="wsr2-scroll"><table class="wsr2-table"><thead><tr><th>No.</th><th>Product</th><th class="n">Opening</th><th class="n">Receipt</th><th class="n">Closing</th><th class="n">SO Sales</th><th class="n">DP Sales</th></tr></thead><tbody>' +
+            '<div class="wsr2-scroll"><table class="wsr2-table"><thead><tr>' + '<th>No.</th><th>Product</th><th class="n">Opening</th><th class="n">Receipt</th><th class="n">Total Stock</th><th class="n">SO Sales</th><th class="n">DP Sales</th><th class="n">Total Sales</th><th class="n">Closing</th>' + '</tr></thead><tbody>' +
             g.items.map(function (p, i) {
                 var r = ws.rows[p];
                 return '<tr><td class="wsr2-no">' + (i + 1) + '</td><td class="wsr2-prod">' + esc(p) + '</td>' +
-                    '<td class="n" data-l="Opening">' + num(r.opening) + '</td><td class="n" data-l="Receipt">' + num(r.receipt) + '</td>' +
-                    '<td class="n" data-l="Closing">' + num(r.closing) + '</td><td class="n" data-l="SO Sales">' + num(r.soSales) + '</td>' +
-                    '<td class="n" data-l="DP Sales">' + num(r.dpSales) + '</td></tr>';
+                    TOT_KEYS.map(function (k) { return '<td class="n" data-l="' + TOT_LABELS[k] + '">' + num(r[k]) + '</td>'; }).join('') + '</tr>';
             }).join('') + '</tbody></table></div></div>';
     }
 
@@ -404,7 +412,7 @@
             }).join('') + '</div>' +
             '<div class="sos-sub" style="margin-bottom:8px;">' + esc(H.fmtLong(W.date)) + (W.readOnly ? ' · view only' : '') + '</div>' +
             wsrTableHtml() +
-            '<div class="wsr2-note"><b>Closing = Opening + Receipt − SO Sales − DP Sales.</b> Opening is filled automatically from the previous day\'s closing' +
+            '<div class="wsr2-note"><b>Total Stock = Opening + Receipt · Total Sales = SO Sales + DP Sales · Closing = Total Stock − Total Sales.</b> Opening is filled automatically from the previous day\'s closing' +
             (W.readOnly ? '.' : ' — you only type it for a product\'s very first day.') + '</div>' +
             '<div class="wsr2-actions">' +
             (W.readOnly ? '' : '<button class="btn-primary" id="wsr2-save" onclick="SOReports.wsrSave()"' + (dirty ? '' : ' disabled') + '>💾 Save ' + esc(H.fmtDay(W.date)) + '</button>') +
@@ -421,11 +429,14 @@
         if (tr) {
             var c = tr.querySelector('[data-closing]');
             if (c) { c.textContent = num(r.closing); c.classList.toggle('neg', r.closing < 0); }
+            var ts = tr.querySelector('[data-tstock]'); if (ts) ts.textContent = num(r.totalStock);
+            var tl = tr.querySelector('[data-tsales]'); if (tl) tl.textContent = num(r.totalSales);
         }
-        var g = catalog()[W.cat], tot = { opening: 0, receipt: 0, closing: 0, soSales: 0, dpSales: 0 };
-        g.items.forEach(function (x) { var s = rowState(x); Object.keys(tot).forEach(function (k) { tot[k] += s[k]; }); });
+        var g = catalog()[W.cat], tot = {};
+        TOT_KEYS.forEach(function (k) { tot[k] = 0; });
+        g.items.forEach(function (x) { var s = rowState(x); TOT_KEYS.forEach(function (k) { tot[k] += s[k]; }); });
         var tds = doc.querySelectorAll('#wsr2-tot td.n');
-        ['opening', 'receipt', 'closing', 'soSales', 'dpSales'].forEach(function (k, i) { if (tds[i]) tds[i].textContent = num(tot[k]); });
+        TOT_KEYS.forEach(function (k, i) { if (tds[i]) tds[i].textContent = num(tot[k]); });
         var b = $('wsr2-save'); if (b) b.disabled = !Object.keys(W.draft).length;
     }
 
@@ -504,7 +515,8 @@
         pdf.text('Rep Name: ' + officerName(), 12, 31);
         pdf.text('DP Name: ' + (W.dp || '-'), 110, 31);
         pdf.text('Week: ' + H.fmtDay(d.ws.mon) + ' - ' + H.fmtDay(d.ws.sun), 210, 31);
-        var cx = [12, 24, 120, 150, 180, 210, 240], head = ['No.', 'Product', 'Opening', 'Receipt', 'Closing', 'SO Sales', 'DP Sales'];
+        var cx = [12, 22, 112, 136, 160, 186, 210, 234, 260];
+        var head = ['No.', 'Product'].concat(TOT_KEYS.map(function (k) { return TOT_LABELS[k]; }));
         var y = 40;
         function ph() {
             pdf.setFontSize(8); pdf.setTextColor(20, 30, 60); pdf.setFont(undefined, 'bold');
@@ -518,8 +530,8 @@
             g.items.forEach(function (it, i) {
                 if (y > 195) { pdf.addPage(); y = 20; ph(); }
                 pdf.setFontSize(7.5); pdf.setTextColor(60, 60, 60);
-                [String(i + 1), it.p, it.r.opening, it.r.receipt, it.r.closing, it.r.soSales, it.r.dpSales].forEach(function (t, ci) {
-                    pdf.text(String(t).slice(0, ci === 1 ? 50 : 12), cx[ci], y);
+                [String(i + 1), it.p].concat(TOT_KEYS.map(function (k) { return it.r[k]; })).forEach(function (t, ci) {
+                    pdf.text(String(t).slice(0, ci === 1 ? 48 : 12), cx[ci], y);
                 });
                 y += 5;
             });
@@ -534,18 +546,18 @@
         var d = weekRowsForExport();
         var wb = new global.ExcelJS.Workbook();
         var ws = wb.addWorksheet('Weekly Stock Report');
-        ws.columns = [{ width: 6 }, { width: 32 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 11 }];
-        ws.mergeCells('A1:G1'); ws.getCell('A1').value = 'SPARTAN BRISK & NUTS'; ws.getCell('A1').font = { size: 15, bold: true }; ws.getCell('A1').alignment = { horizontal: 'center' };
-        ws.mergeCells('A2:G2'); ws.getCell('A2').value = 'WEEKLY STOCK REPORT'; ws.getCell('A2').font = { size: 12, bold: true }; ws.getCell('A2').alignment = { horizontal: 'center' };
+        ws.columns = [{ width: 6 }, { width: 32 }, { width: 11 }, { width: 11 }, { width: 12 }, { width: 11 }, { width: 11 }, { width: 12 }, { width: 11 }];
+        ws.mergeCells('A1:I1'); ws.getCell('A1').value = 'SPARTAN BRISK & NUTS'; ws.getCell('A1').font = { size: 15, bold: true }; ws.getCell('A1').alignment = { horizontal: 'center' };
+        ws.mergeCells('A2:I2'); ws.getCell('A2').value = 'WEEKLY STOCK REPORT'; ws.getCell('A2').font = { size: 12, bold: true }; ws.getCell('A2').alignment = { horizontal: 'center' };
         ws.addRow(['Rep Name', officerName(), 'DP Name', W.dp || '', 'Week', H.fmtDay(d.ws.mon) + ' - ' + H.fmtDay(d.ws.sun)]);
         ws.addRow([]);
-        var hr = ws.addRow(['No.', 'Product', 'Opening', 'Receipt', 'Closing', 'SO Sales', 'DP Sales']);
+        var hr = ws.addRow(['No.', 'Product'].concat(TOT_KEYS.map(function (k) { return TOT_LABELS[k]; })));
         hr.font = { bold: true };
         hr.eachCell(function (c) { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCE8F7' } }; });
         d.groups.forEach(function (g) {
             var cr = ws.addRow([g.cat]); cr.font = { bold: true };
-            ws.mergeCells('A' + cr.number + ':G' + cr.number);
-            g.items.forEach(function (it, i) { ws.addRow([i + 1, it.p, it.r.opening, it.r.receipt, it.r.closing, it.r.soSales, it.r.dpSales]); });
+            ws.mergeCells('A' + cr.number + ':I' + cr.number);
+            g.items.forEach(function (it, i) { ws.addRow([i + 1, it.p].concat(TOT_KEYS.map(function (k) { return it.r[k]; }))); });
         });
         var buf = await wb.xlsx.writeBuffer();
         var a = doc.createElement('a');

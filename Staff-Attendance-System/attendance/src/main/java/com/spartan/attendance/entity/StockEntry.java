@@ -11,8 +11,11 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * One product's stock for one Sales Officer on one day.
- * closing = opening + receipt - soSales - dpSales, and the next day's opening is always this day's closing.
+ * One product's stock for one Sales Officer on one day (a row of the Weekly Stock Report).
+ *   totalStock = opening + receipt
+ *   totalSales = soSales + dpSales
+ *   closing    = totalStock - totalSales      (the Final Closing Stock)
+ * and the next day's opening is always this day's closing.
  */
 @Entity
 @Table(name = "stock_entries",
@@ -55,6 +58,15 @@ public class StockEntry {
     @Column(name = "dp_sales", nullable = false)
     private int dpSales;
 
+    /** Opening + Receipt. */
+    @Column(name = "total_stock", nullable = false, columnDefinition = "int not null default 0")
+    private int totalStock;
+
+    /** SO Sales + DP Sales. */
+    @Column(name = "total_sales", nullable = false, columnDefinition = "int not null default 0")
+    private int totalSales;
+
+    /** Final Closing Stock = Total Stock - Total Sales. Becomes the next day's opening. */
     @Column(nullable = false)
     private int closing;
 

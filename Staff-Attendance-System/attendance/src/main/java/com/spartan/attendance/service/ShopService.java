@@ -25,7 +25,7 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Shops a Sales Officer can mark attendance at. Only the Admin creates, moves, assigns or deactivates them. */
+/** Shops a Sales Officer can mark attendance at. Added by the Admin, a manager for their team, or the Sales Officer for themselves. */
 @Service
 @RequiredArgsConstructor
 public class ShopService {
@@ -139,6 +139,22 @@ public class ShopService {
         auditService.log(admin.getId(), AuditAction.SHOP_DELETE,
                 "Deleted shop " + s.getCode() + " '" + s.getName() + "' (" + cleared + " past attendance record(s) kept, no longer linked to a shop)", info);
         repository.delete(s);
+    }
+
+    // ------------------------------------------------------------------ Sales Officer adds their own shop
+
+    /**
+     * A Sales Officer adds a shop they work at. The server always assigns it to the caller, generates the code, uses the
+     * default radius and makes it ACTIVE - whatever the request says about those. The latitude/longitude are the
+     * officer's GPS position taken at the shop. Because it is assigned to the officer, it shows up in GET /api/shops/mine
+     * (shop check-in) and in their ASM's / RM's Team Shops at once.
+     */
+    @Transactional
+    public ShopResponse createOwn(AppUserDetails officer, ShopRequest req, RequestInfo info) {
+        rejectDuplicateName(req.name(), officer.getId(), null);
+        ShopRequest own = new ShopRequest(null, req.name(), req.locality(), req.region(), req.address(), req.phone(),
+                req.latitude(), req.longitude(), null, officer.getId(), Status.ACTIVE, req.city());
+        return create(officer, own, info);
     }
 
     // ------------------------------------------------------------------ team shops (ASM / RM / RSM)

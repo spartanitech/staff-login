@@ -19,10 +19,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Daily stock per product for a Sales Officer:
- *   closing = opening + receipt - SO sales - DP sales
- *   next day's opening = previous closing (never typed in, except for a product's very first day on record)
- * Changing an earlier day re-flows the openings/closings of every later day of that product.
+ * Weekly Stock Report - daily stock per product for a Sales Officer. The server does all the arithmetic:
+ *   Total Stock         = Opening Stock + Receipt
+ *   Total Sales         = SO Sales + DP Sales
+ *   Final Closing Stock = Total Stock - Total Sales
+ *   next day's Opening  = this day's Final Closing Stock (saved to the repository straight away)
+ * Opening is only typed in for a product's very first day on record. Changing an earlier day re-flows the
+ * openings/closings of every later day of that product.
  */
 @Service
 @RequiredArgsConstructor
@@ -94,19 +97,15 @@ public class StockService {
             if (existing == null && empty) {
                 continue; // nothing typed for this product today - its opening still carries forward on its own
             }
-            int closing = opening + receipt - soSales - dpSales;
-            if (closing < 0) {
-                throw ApiException.badRequest("STOCK_NEGATIVE", product + ": SO Sales + DP Sales (" + (soSales + dpSales)
-                        + ") is more than Opening + Receipt (" + (opening + receipt) + ").");
+            StockTotals t = calculate(opening, receipt, soSales, dpSales);
+            if (t.closing() < 0) {
+                throw ApiException.badRequest("STOCK_NEGATIVE", product + ": Total Sales (" + t.totalSales()
+                        + ") is more than Total Stock (" + t.totalStock() + ").");
             }
             StockEntry e = existing != null ? existing
                     : StockEntry.builder().officer(officer).entryDate(date).product(product).build();
             e.setCategory(clean(row.category()) != null ? clean(row.category()) : e.getCategory());
-            e.setOpening(opening);
-            e.setReceipt(receipt);
-            e.setSoSales(soSales);
-            e.setDpSales(dpSales);
-            e.setClosing(closing);
+            apply(e, t);
             if (row.unitPrice() != null) {
                 e.setUnitPrice(row.unitPrice());
             }
@@ -114,20 +113,72 @@ public class StockService {
                 e.setDpName(dpName);
             }
             repository.save(e);
-            reflowAfter(officer.getId(), product, date, closing);
+            carryForward(officer, e);
         }
         return repository.findByOfficerIdAndEntryDateBetweenOrderByEntryDateAscIdAsc(officer.getId(), date, date)
                 .stream().map(StockEntryResponse::from).toList();
     }
 
-    /** Every later day of this product starts from the day before's closing. */
-    private void reflowAfter(Long officerId, String product, LocalDate date, int closing) {
-        int carry = closing;
-        List<StockEntry> later = repository.findByOfficerIdAndProductAndEntryDateAfterOrderByEntryDateAsc(officerId, product, date);
+    // ------------------------------------------------------------------ calculation
+
+    /** The numbers of one product on one day. */
+    public record StockTotals(int opening, int receipt, int totalStock, int soSales, int dpSales, int totalSales, int closing) {
+    }
+
+    /**
+     * Total Stock = Opening + Receipt, Total Sales = SO Sales + DP Sales, Final Closing Stock = Total Stock - Total Sales.
+     * The caller decides what to do with a negative closing.
+     */
+    public static StockTotals calculate(int opening, int receipt, int soSales, int dpSales) {
+        int totalStock = opening + receipt;
+        int totalSales = soSales + dpSales;
+        int closing = totalStock - totalSales;
+        return new StockTotals(opening, receipt, totalStock, soSales, dpSales, totalSales, closing);
+    }
+
+    private static void apply(StockEntry e, StockTotals t) {
+        e.setOpening(t.opening());
+        e.setReceipt(t.receipt());
+        e.setTotalStock(t.totalStock());
+        e.setSoSales(t.soSales());
+        e.setDpSales(t.dpSales());
+        e.setTotalSales(t.totalSales());
+        e.setClosing(t.closing());
+    }
+
+    /**
+     * Makes this day's Final Closing Stock the Opening Stock of the next date and saves it:
+     *  - the next date gets a row (Opening = this closing, nothing received or sold yet) if it has none, and
+     *  - every later day already on record is recalculated from the day before's closing.
+     */
+    private void carryForward(User officer, StockEntry day) {
+        Long officerId = officer.getId();
+        String product = day.getProduct();
+        LocalDate next = day.getEntryDate().plusDays(1);
+        if (!repository.existsByOfficerIdAndEntryDateAndProduct(officerId, next, product)) {
+            StockEntry n = StockEntry.builder()
+                    .officer(officer)
+                    .entryDate(next)
+                    .product(product)
+                    .category(day.getCategory())
+                    .unitPrice(day.getUnitPrice())
+                    .dpName(day.getDpName())
+                    .build();
+            apply(n, calculate(day.getClosing(), 0, 0, 0));
+            repository.save(n);
+        }
+
+        int carry = day.getClosing();
+        List<StockEntry> later = repository.findByOfficerIdAndProductAndEntryDateAfterOrderByEntryDateAsc(officerId, product, day.getEntryDate());
         for (StockEntry e : later) {
-            e.setOpening(carry);
-            e.setClosing(carry + e.getReceipt() - e.getSoSales() - e.getDpSales());
-            carry = e.getClosing();
+            StockTotals t = calculate(carry, e.getReceipt(), e.getSoSales(), e.getDpSales());
+            if (t.closing() < 0) {
+                throw ApiException.badRequest("STOCK_NEGATIVE_LATER", product + ": with this change the stock on "
+                        + e.getEntryDate() + " would go below zero (Total Stock " + t.totalStock() + ", Total Sales "
+                        + t.totalSales() + "). Please correct that day too.");
+            }
+            apply(e, t);
+            carry = t.closing();
         }
         if (!later.isEmpty()) {
             repository.saveAll(later);

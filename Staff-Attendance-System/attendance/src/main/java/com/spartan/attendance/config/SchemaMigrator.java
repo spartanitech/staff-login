@@ -38,5 +38,22 @@ public class SchemaMigrator implements ApplicationRunner {
             log.warn("Could not check/migrate audit_logs.action ({}). If a new audit action fails with 'Data truncated', "
                     + "run: ALTER TABLE audit_logs MODIFY COLUMN action VARCHAR(40) NOT NULL;", e.getMessage());
         }
+        backfillStockTotals();
+    }
+
+    /**
+     * stock_entries.total_stock / total_sales were added later; rows saved before that have 0 in both. Fill them in
+     * from the numbers already on the row (Total Stock = opening + receipt, Total Sales = SO sales + DP sales).
+     */
+    private void backfillStockTotals() {
+        try {
+            int n = jdbc.update("update stock_entries set total_stock = opening + receipt, total_sales = so_sales + dp_sales "
+                    + "where total_stock <> opening + receipt or total_sales <> so_sales + dp_sales");
+            if (n > 0) {
+                log.info("Filled Total Stock / Total Sales on {} older stock row(s).", n);
+            }
+        } catch (Exception e) {
+            log.warn("Could not back-fill stock_entries totals ({}).", e.getMessage());
+        }
     }
 }

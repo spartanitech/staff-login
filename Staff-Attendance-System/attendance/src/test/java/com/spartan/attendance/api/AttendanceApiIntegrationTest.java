@@ -579,4 +579,76 @@ class AttendanceApiIntegrationTest {
     void swaggerUiIsReachableWithoutLogin() throws Exception {
         mvc.perform(get("/v3/api-docs")).andExpect(status().isOk()).andExpect(jsonPath("$.info.title", startsWith("Staff Attendance")));
     }
+
+    // ------------------------------------------------------------------ Sales Officer adds their own shop
+
+    @Test
+    void salesOfficerAddsTheirOwnShop_itIsAssignedToThemAndUsableForCheckIn() throws Exception {
+        Officer o = newOfficer("ownshop", 12.0, 79.0, 50);
+        MvcResult made = mvc.perform(auth(post("/api/shops/mine"), o.token()).content(
+                        "{\"name\":\"My Corner Store\",\"city\":\"Madurai\",\"latitude\":12.5,\"longitude\":79.5,"
+                                + "\"assignedOfficerId\":999,\"allowedRadiusMeters\":500,\"code\":\"HACK\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.code", startsWith("SHP")))            // the server picks the code
+                .andExpect(jsonPath("$.allowedRadiusMeters").value(50))       // and the default radius
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andReturn();
+        long shopId = ((Number) JsonPath.read(made.getResponse().getContentAsString(), "$.id")).longValue();
+
+        // always assigned to the caller, so it is in their check-in list and check-in works there
+        mvc.perform(auth(get("/api/shops/mine"), o.token())).andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.name=='My Corner Store')]", hasSize(1)));
+        mvc.perform(shopCheckIn(o.token(), shopId, 12.5, 79.5, 10, JPEG)).andExpect(status().isCreated());
+
+        // the same name twice is refused; managers and admins cannot use this endpoint
+        mvc.perform(auth(post("/api/shops/mine"), o.token()).content(
+                        "{\"name\":\"my corner store\",\"latitude\":12.5,\"longitude\":79.5}"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("SHOP_NAME_TAKEN"));
+        mvc.perform(auth(post("/api/shops/mine"), adminToken()).content(
+                        "{\"name\":\"Admin Try\",\"latitude\":12.5,\"longitude\":79.5}"))
+                .andExpect(status().isForbidden());
+    }
+
+    // ------------------------------------------------------------------ Weekly Stock Report arithmetic
+
+    @Test
+    void stockTotalsAreCalculatedAndTheClosingBecomesNextDaysOpening() throws Exception {
+        Officer o = newOfficer("stock", 12.1, 79.1, 50);
+        // day 1: opening 100 (first day, typed in) + receipt 50 = total stock 150; SO 30 + DP 20 = total sales 50; closing 100
+        mvc.perform(auth(put("/api/stock/2026-01-05"), o.token()).content(
+                        "{\"rows\":[{\"product\":\"Almond 250g\",\"opening\":100,\"receipt\":50,\"soSales\":30,\"dpSales\":20}]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].totalStock").value(150))
+                .andExpect(jsonPath("$[0].totalSales").value(50))
+                .andExpect(jsonPath("$[0].closing").value(100));
+
+        // the next date already has a row whose opening is that closing
+        mvc.perform(auth(get("/api/stock?from=2026-01-06&to=2026-01-06"), o.token())).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].opening").value(100))
+                .andExpect(jsonPath("$[0].closing").value(100));
+        mvc.perform(auth(get("/api/stock/openings?date=2026-01-06"), o.token())).andExpect(status().isOk())
+                .andExpect(jsonPath("$['Almond 250g']").value(100));
+
+        // day 2: a typed opening is ignored (it comes from day 1); 100 + 10 - (40 + 5) = 65
+        mvc.perform(auth(put("/api/stock/2026-01-06"), o.token()).content(
+                        "{\"rows\":[{\"product\":\"Almond 250g\",\"opening\":999,\"receipt\":10,\"soSales\":40,\"dpSales\":5}]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].opening").value(100))
+                .andExpect(jsonPath("$[0].totalStock").value(110))
+                .andExpect(jsonPath("$[0].totalSales").value(45))
+                .andExpect(jsonPath("$[0].closing").value(65));
+
+        // changing day 1 re-flows day 2: day 1 closing 90 -> day 2 = 90 + 10 - 45 = 55
+        mvc.perform(auth(put("/api/stock/2026-01-05"), o.token()).content(
+                        "{\"rows\":[{\"product\":\"Almond 250g\",\"receipt\":40,\"soSales\":30,\"dpSales\":20}]}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].closing").value(90));
+        mvc.perform(auth(get("/api/stock?from=2026-01-06&to=2026-01-06"), o.token())).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].opening").value(90))
+                .andExpect(jsonPath("$[0].closing").value(55));
+
+        // selling more than the total stock is refused
+        mvc.perform(auth(put("/api/stock/2026-01-06"), o.token()).content(
+                        "{\"rows\":[{\"product\":\"Almond 250g\",\"receipt\":0,\"soSales\":500,\"dpSales\":0}]}"))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("STOCK_NEGATIVE"));
+    }
 }
