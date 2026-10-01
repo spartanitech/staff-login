@@ -266,6 +266,22 @@
             return request('POST', '/api/users/' + id + '/reset-password', { body: { newPassword: newPassword } });
         },
         deleteUser: function (id) { return request('DELETE', '/api/users/' + id); },
+        // who reports to a manager: ASM -> Sales Officers, RM -> ASMs, Marketing Manager -> RMs (Admin)
+        assignTeam: function (managerId, memberIds) {
+            return request('PUT', '/api/users/' + managerId + '/team', { body: { memberIds: memberIds || [] } });
+        },
+
+        // portal messages (server decides who sees what)
+        messages: function () { return request('GET', '/api/messages'); },
+        sendMessage: function (to, text) { return request('POST', '/api/messages', { body: { to: to, text: text } }); },
+        editMessage: function (id, text) { return request('PUT', '/api/messages/' + id, { body: { text: text } }); },
+        deleteMessage: function (id) { return request('DELETE', '/api/messages/' + id); },
+
+        // telephone call report
+        callLogs: function (q) { return request('GET', '/api/call-logs', { query: q }); },
+        logCall: function (body) { return request('POST', '/api/call-logs', { body: body }); },
+        renameCall: function (id, shop) { return request('PUT', '/api/call-logs/' + id, { body: { shop: shop } }); },
+        deleteCall: function (id) { return request('DELETE', '/api/call-logs/' + id); },
 
         // shops (Admin)
         adminShops: function (q) { return request('GET', '/api/admin/shops', { query: q }); },
