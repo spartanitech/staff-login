@@ -148,7 +148,13 @@
         '.sp-modal-x{position:absolute;top:12px;right:14px;background:none;border:none;font-size:24px;line-height:1;cursor:pointer;color:#04344C}',
         '#sp-modal-overlay{padding:14px;z-index:3000}',
         '.sp-map{height:230px;border-radius:10px;border:1px solid #D3E2F5;margin-top:6px}',
-        '.sp-row-actions{display:flex;gap:6px;flex-wrap:wrap}',
+        '.sp-row-actions{display:flex;gap:6px;flex-wrap:wrap;min-width:150px}',
+        '.sp-row-actions .sp-btn{white-space:nowrap}',
+        '.sp-team-list{max-height:52vh;overflow:auto;border:1px solid #E4EEF9;border-radius:10px;margin-top:8px}',
+        '.sp-team-row{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-bottom:1px solid #EEF3FA;cursor:pointer}',
+        '.sp-team-row:last-child{border-bottom:none}',
+        '.sp-team-row input{margin-top:3px;width:16px;height:16px;flex:none}',
+        '.sp-team-note{color:#7A869A}', '.sp-team-move{color:#C2410C}',
         '@media (max-width:640px){.sp-att-card{padding:14px}.sp-btn{padding:12px 16px;flex:1 1 auto}.sp-modal-card{padding:18px 14px}}'
     ].join('\n');
 

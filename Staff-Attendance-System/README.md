@@ -180,3 +180,21 @@ Everything below is stored in MySQL (Hibernate `ddl-auto=update` creates the new
   (header and rows as JSON). Edits are saved automatically; offline edits wait on the phone and sync on reconnect.
   Its PDF / Excel include a Shop Details section (mobile, address, categories).
 * Tests: `scripts/ui-test/live-e2e.js` (real browser, 54 checks against the mock API).
+
+## Teams, messages and the call report on the server (portal-sync.js)
+* **Team allocation** – Admin → Staff Accounts → **Team (n)** on a Marketing Manager / Regional Manager / Area Sales
+  Manager row. Tick the people who report to them (`PUT /api/users/{id}/team`, audited as `TEAM_ASSIGN`): ASM → Sales
+  Officers, RM → ASMs, Marketing Manager → RMs. A person ticked here moves from their old manager. An ASM (and the
+  managers above) then sees only those officers – their attendance, shops, sales, calls and messages; the server
+  enforces it (`ScopeService`), the screens only follow.
+* **Messages** – `GET/POST /api/messages`, `PUT/DELETE /api/messages/{id}`. The sender is taken from the login, not
+  from the phone. Admin/Owner see every message; everyone else sees what they sent, what is addressed to everyone, to
+  their role or to them by name, and what their own team sent. An SO/ASM/RM can address by name only people in their own
+  tree or their own managers. A message typed without a connection is kept on the phone and sent automatically.
+* **Telephone Call Report** – every Call tap is stored with `POST /api/call-logs` (a client reference stops duplicates
+  when it is re-sent), managers read their team's calls with `GET /api/call-logs`, rename/delete with
+  `PUT/DELETE /api/call-logs/{id}`.
+* **Admin console** – Top Performers and Role-wise Performance are worked out from this month's stock reports (SO +
+  DP sales) and targets; managers without a team are flagged. The header avatar shows the signed-in person.
+* New tables `portal_messages` and `call_logs` are created by `ddl-auto=update` on the next start – no manual SQL.
+* Test: `cd scripts/ui-test && node sync-e2e.js` (37 checks against the mock API, real headless Chromium).

@@ -33,7 +33,7 @@ function haversine(lat1, lon1, lat2, lon2) {
 }
 
 function createMock() {
-    const S = { seq: { user: 0, att: 0, loc: 0, audit: 0, shop: 0 }, users: [], atts: [], locs: [], shops: [], photos: new Map(), audit: [], tokens: new Map(), maxAcc: 100 };
+    const S = { msgs: [], calls: [], seq: { user: 0, att: 0, loc: 0, audit: 0, shop: 0, msg: 0, call: 0 }, users: [], atts: [], locs: [], shops: [], photos: new Map(), audit: [], tokens: new Map(), maxAcc: 100 };
     const settings = { timezone: IST, shiftStart: '09:30', lateGraceMinutes: 15, halfDayMinutes: 240, maxAccuracyMeters: 100, weeklyOff: 'SUNDAY' };
 
     function addUser(code, name, username, password, role, designation, area, region, mgr) {
@@ -401,6 +401,62 @@ function createMock() {
                 page, size, totalElements: all.length, totalPages: Math.ceil(all.length / size) }];
         }
 
+        // ---- messages (MessageService) ----
+        if (p === '/api/messages' || p.startsWith('/api/messages/')) {
+            const TITLE = { ADMIN: 'Admin', OWNER: 'Owner', RSM: 'Marketing Manager', RM: 'Regional Manager', ASM: 'Area Sales Manager', SO: 'Sales Officer' };
+            const mResp = x => ({ id: x.id, fromId: x.senderId, from: x.from, fromRole: x.fromRole, to: x.to, toId: x.toId, text: x.text, at: x.at, updatedAt: x.at });
+            if (method === 'GET' && p === '/api/messages') {
+                const ids = scopeIds(caller), myRole = TITLE[caller.role];
+                return [200, S.msgs.filter(x => !ids || x.senderId === caller.id || x.to === 'all' || x.to === myRole || x.toId === caller.id || ids.has(x.senderId))
+                    .sort((a, b) => b.at.localeCompare(a.at)).map(mResp)];
+            }
+            if (method === 'POST' && p === '/api/messages') {
+                if (!body || !String(body.text || '').trim()) throw bad('VALIDATION_FAILED', 'Type a message first');
+                let to = String(body.to || '').trim(), toId = null;
+                if (/^person:/i.test(to)) {
+                    const r = S.users.find(u => u.status === 'ACTIVE' && u.name.toLowerCase() === to.slice(7).trim().toLowerCase());
+                    if (!r) throw bad('UNKNOWN_RECIPIENT', "There is no active staff member called '" + to.slice(7) + "'.");
+                    const ids = scopeIds(caller);
+                    let ok = !ids || ['ADMIN', 'OWNER'].includes(r.role) || ids.has(r.id);
+                    for (let c = S.users.find(u => u.id === caller.reportingManagerId), g = 0; !ok && c && g < 50; c = S.users.find(u => u.id === c.reportingManagerId), g++) if (c.id === r.id) ok = true;
+                    if (!ok) throw new ApiErr(403, 'OUT_OF_SCOPE', 'You can only message people in your own team or your managers.');
+                    to = 'person:' + r.name; toId = r.id;
+                } else if (to !== 'all' && !Object.values(TITLE).includes(to)) throw bad('BAD_RECIPIENT', 'Send to everyone, a role, or one named person.');
+                const x = { id: ++S.seq.msg, senderId: caller.id, from: caller.name, fromRole: TITLE[caller.role], to, toId, text: String(body.text).trim(), at: new Date().toISOString() };
+                S.msgs.push(x); return [201, mResp(x)];
+            }
+            if ((m = /^\/api\/messages\/(\d+)$/.exec(p))) {
+                const x = S.msgs.find(y => y.id === Number(m[1])); if (!x) throw new ApiErr(404, 'NOT_FOUND', 'Message not found.');
+                if (caller.role !== 'ADMIN' && x.senderId !== caller.id) throw new ApiErr(403, 'NOT_YOUR_MESSAGE', 'You can only change messages you sent.');
+                if (method === 'PUT') { x.text = String(body.text || '').trim() || x.text; return [200, mResp(x)]; }
+                if (method === 'DELETE') { S.msgs = S.msgs.filter(y => y !== x); return [204]; }
+            }
+        }
+        // ---- telephone call report (CallLogService) ----
+        if (p === '/api/call-logs' || p.startsWith('/api/call-logs/')) {
+            const cResp = c => { const d = new Date(c.at); const u = S.users.find(x => x.id === c.officerId) || {};
+                return { id: c.id, officerId: c.officerId, officerName: u.name, shop: c.shop, mobile: c.mobile, callDate: c.at.slice(0, 10),
+                    date: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: IST }),
+                    time: d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: IST }), at: c.at, ref: c.ref }; };
+            if (method === 'GET' && p === '/api/call-logs') {
+                const ids = scopeIds(caller);
+                if (q.officerId && ids && !ids.has(Number(q.officerId))) throw new ApiErr(403, 'OUT_OF_SCOPE', 'Outside your team');
+                return [200, S.calls.filter(c => (!ids || ids.has(c.officerId)) && (!q.officerId || c.officerId === Number(q.officerId))).sort((a, b) => b.at.localeCompare(a.at)).map(cResp)];
+            }
+            if (method === 'POST' && p === '/api/call-logs') {
+                need('SO');
+                if (body.ref) { const ex = S.calls.find(c => c.ref === body.ref); if (ex) return [201, cResp(ex)]; }
+                const c = { id: ++S.seq.call, officerId: caller.id, shop: body.shop, mobile: body.mobile || null, at: body.at || new Date().toISOString(), ref: body.ref || null };
+                S.calls.push(c); return [201, cResp(c)];
+            }
+            if ((m = /^\/api\/call-logs\/(\d+)$/.exec(p))) {
+                const c = S.calls.find(y => y.id === Number(m[1])); if (!c) throw new ApiErr(404, 'NOT_FOUND', 'Call not found.');
+                if (caller.role !== 'ADMIN' && c.officerId !== caller.id) throw new ApiErr(403, 'NOT_YOUR_CALL', 'You can only change your own calls.');
+                if (method === 'PUT') { c.shop = String(body.shop || c.shop); return [200, cResp(c)]; }
+                if (method === 'DELETE') { S.calls = S.calls.filter(y => y !== c); return [204]; }
+            }
+        }
+
         if (method === 'GET' && p === '/api/users') { const ids = scopeIds(caller); return [200, S.users.filter(u => !ids || ids.has(u.id)).map(pub)]; }
         if (p.startsWith('/api/users') && method !== 'GET') need('ADMIN');
         if (method === 'POST' && p === '/api/users') {
@@ -414,6 +470,16 @@ function createMock() {
         if ((m = /^\/api\/users\/(\d+)$/.exec(p)) && method === 'PUT') {
             const u = S.users.find(x => x.id === Number(m[1])); Object.assign(u, { name: body.name, username: body.username, role: body.role, designation: body.designation,
                 area: body.area, region: body.region, reportingManagerId: body.reportingManagerId }); log(caller.id, 'USER_UPDATE', `Updated ${u.username}`); return [200, pub(u)];
+        }
+        if ((m = /^\/api\/users\/(\d+)\/team$/.exec(p)) && method === 'PUT') {
+            const mgr = S.users.find(x => x.id === Number(m[1])); if (!mgr) throw new ApiErr(404, 'NOT_FOUND', 'User not found.');
+            const memberRole = { RSM: 'RM', RM: 'ASM', ASM: 'SO' }[mgr.role];
+            if (!memberRole) throw bad('NOT_A_MANAGER', 'Only a Marketing Manager, Regional Manager or Area Sales Manager has a team.');
+            const want = new Set((body.memberIds || []).map(Number));
+            want.forEach(id => { const u = S.users.find(x => x.id === id); if (!u || u.role !== memberRole) throw bad('WRONG_ROLE', (u ? u.name : id) + ' cannot join this team'); });
+            S.users.forEach(u => { if (want.has(u.id)) u.reportingManagerId = mgr.id; else if (u.reportingManagerId === mgr.id && u.role === memberRole) u.reportingManagerId = null; });
+            log(caller.id, 'TEAM_ASSIGN', 'Team of ' + mgr.name);
+            return [200, S.users.filter(u => u.reportingManagerId === mgr.id).map(pub)];
         }
         if ((m = /^\/api\/users\/(\d+)\/status$/.exec(p)) && method === 'PATCH') {
             const u = S.users.find(x => x.id === Number(m[1]));

@@ -66,6 +66,15 @@ public class UserController {
         return userService.update(caller, id, request, RequestInfo.from(http));
     }
 
+    @Operation(summary = "Set who reports to a manager (ADMIN). Body: {\"memberIds\": [..]} - ASM gets SOs, RM gets ASMs, RSM gets RMs")
+    @PreAuthorize("hasRole('ADMIN')")
+    @PutMapping("/{id}/team")
+    public List<UserResponse> assignTeam(@AuthenticationPrincipal AppUserDetails caller, @PathVariable Long id,
+                                         @RequestBody java.util.Map<String, List<Long>> body, HttpServletRequest http) {
+        return userService.assignTeam(caller, id, body == null ? List.of() : body.getOrDefault("memberIds", List.of()),
+                RequestInfo.from(http));
+    }
+
     @Operation(summary = "Activate / deactivate a user (ADMIN)")
     @PreAuthorize("hasRole('ADMIN')")
     @PatchMapping("/{id}/status")

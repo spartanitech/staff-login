@@ -259,6 +259,8 @@
                         '<td><span class="sp-badge sp-b-' + esc(u.status) + '">' + esc(u.status === 'ACTIVE' ? 'Active' : 'Inactive') + '</span></td>' +
                         '<td><div class="sp-row-actions">' +
                         '<button type="button" class="sp-btn sp-btn-sm sp-btn-ghost" data-edit="' + u.id + '">Edit</button>' +
+                        (TEAM_OF[u.role] ? '<button type="button" class="sp-btn sp-btn-sm sp-btn-primary" data-team="' + u.id + '">Team (' +
+                            users.filter(function (x) { return x.reportingManagerId === u.id && x.role === TEAM_OF[u.role]; }).length + ')</button>' : '') +
                         '<button type="button" class="sp-btn sp-btn-sm sp-btn-ghost" data-toggle="' + u.id + '">' + (u.status === 'ACTIVE' ? 'Deactivate' : 'Activate') + '</button>' +
                         '<button type="button" class="sp-btn sp-btn-sm sp-btn-ghost" data-reset="' + u.id + '">Reset password</button>' +
                         '<button type="button" class="sp-btn sp-btn-sm sp-btn-danger" data-delete="' + u.id + '">Delete</button></div></td></tr>';
@@ -266,6 +268,9 @@
             function byId(v) { return users.filter(function (u) { return String(u.id) === v; })[0]; }
             Array.prototype.forEach.call(t.querySelectorAll('[data-edit]'), function (b) {
                 b.addEventListener('click', function () { openUserForm(byId(b.getAttribute('data-edit')), users, reload); });
+            });
+            Array.prototype.forEach.call(t.querySelectorAll('[data-team]'), function (b) {
+                b.addEventListener('click', function () { openTeamForm(byId(b.getAttribute('data-team')), users, reload); });
             });
             Array.prototype.forEach.call(t.querySelectorAll('[data-reset]'), function (b) {
                 b.addEventListener('click', function () { openResetPassword(byId(b.getAttribute('data-reset'))); });
@@ -294,6 +299,58 @@
             catch (e) { host.innerHTML = errBox(e); }
         }
         reload();
+    }
+
+    // Who a manager's team is made of: Marketing Manager -> Regional Managers -> Area Sales Managers -> Sales Officers.
+    var TEAM_OF = { RSM: 'RM', RM: 'ASM', ASM: 'SO' };
+
+    /** Tick the people who report to this manager. Only they (and the managers above) can see them. */
+    function openTeamForm(mgr, users, done) {
+        var memberRole = TEAM_OF[mgr.role];
+        var body = U.openModal('Team of ' + mgr.name + ' · ' + U.roleLabel(mgr.role), { sticky: true });
+        var pool = users.filter(function (u) { return u.role === memberRole && u.status === 'ACTIVE'; })
+            .sort(function (a, b) { return (a.reportingManagerId === mgr.id ? 0 : 1) - (b.reportingManagerId === mgr.id ? 0 : 1) || a.name.localeCompare(b.name); });
+        var q = '';
+        function rows() {
+            var ql = q.trim().toLowerCase();
+            return pool.filter(function (u) { return !ql || (u.name + ' ' + (u.area || '') + ' ' + u.employeeCode).toLowerCase().indexOf(ql) >= 0; })
+                .map(function (u) {
+                    var mine = u.reportingManagerId === mgr.id;
+                    var other = u.reportingManagerId && !mine ? 'now under ' + (u.reportingManagerName || 'someone else') : (mine ? '' : 'not assigned');
+                    return '<label class="sp-team-row"><input type="checkbox" value="' + u.id + '"' + (mine ? ' checked' : '') + '>' +
+                        '<span><b>' + esc(u.name) + '</b> <small>' + esc(u.employeeCode) + (u.area ? ' · ' + esc(u.area) : '') + '</small>' +
+                        (other ? '<br><small class="sp-team-note' + (u.reportingManagerId ? ' sp-team-move' : '') + '">' + esc(other) + '</small>' : '') + '</span></label>';
+                }).join('') || '<div class="sp-muted">No active ' + esc(U.roleLabel(memberRole)) + ' yet — add them under Staff Accounts first.</div>';
+        }
+        body.innerHTML =
+            '<p class="sp-muted" style="margin:0 0 10px">Ticked ' + esc(U.roleLabel(memberRole)) + 's report to <b>' + esc(mgr.name) +
+            '</b>. Only ' + esc(mgr.name) + ' and the managers above can see them, their attendance, shops and sales. ' +
+            'Ticking someone who is under another manager moves them here.</p>' +
+            '<label class="sp-field">Search<input id="sp-t-q" placeholder="Name, area or code"></label>' +
+            '<div id="sp-t-list" class="sp-team-list">' + rows() + '</div>' +
+            '<div id="sp-t-err"></div><div class="sp-toolbar" style="margin-top:14px"><span id="sp-t-count" class="sp-muted"></span><span class="sp-spacer"></span>' +
+            '<button type="button" class="sp-btn sp-btn-sm sp-btn-ghost" id="sp-t-cancel">Cancel</button>' +
+            '<button type="button" class="sp-btn sp-btn-sm sp-btn-primary" id="sp-t-save">Save team</button></div>';
+        var picked = {};
+        pool.forEach(function (u) { if (u.reportingManagerId === mgr.id) picked[u.id] = true; });
+        function count() { $('#sp-t-count', body).textContent = Object.keys(picked).length + ' selected'; }
+        function bind() {
+            Array.prototype.forEach.call(body.querySelectorAll('#sp-t-list input[type=checkbox]'), function (c) {
+                c.checked = !!picked[c.value];
+                c.addEventListener('change', function () { if (c.checked) picked[c.value] = true; else delete picked[c.value]; count(); });
+            });
+        }
+        $('#sp-t-q', body).addEventListener('input', function (e) { q = e.target.value; $('#sp-t-list', body).innerHTML = rows(); bind(); });
+        bind(); count();
+        $('#sp-t-cancel', body).addEventListener('click', U.closeModal);
+        $('#sp-t-save', body).addEventListener('click', async function () {
+            var btn = this; btn.disabled = true;
+            try {
+                await API.assignTeam(mgr.id, Object.keys(picked).map(Number));
+                U.closeModal(); done();
+                if (global.SOLive) global.SOLive.refresh();
+            } catch (e) { $('#sp-t-err', body).innerHTML = errBox(e); btn.disabled = false; }
+        });
     }
 
     function openUserForm(user, users, done) {
@@ -775,7 +832,7 @@
                 '<div class="sp-kpis">' + cards.map(function (c) {
                     return '<div class="sp-kpi"><b>' + c[1] + '</b><span>' + esc(c[0]) + '</span></div>';
                 }).join('') + '</div>' +
-                (sites === 0 ? '<div class="sp-msg sp-msg-info">No active work location yet — add one under Work Locations so staff can check in.</div>' : '') +
+                (sites === 0 ? '<div class="sp-msg sp-msg-info">No office work location yet — managers check in at a Work Location (Sales Officers check in at their assigned shops).</div>' : '') +
                 (shopsActive === 0 ? '<div class="sp-msg sp-msg-info">No active shop yet — add shops under Shops and assign them so Sales Officers can mark attendance.</div>' : '') +
                 '<div class="sp-toolbar"><button type="button" class="sp-btn sp-btn-sm sp-btn-ghost" onclick="supShowSection(\'attendance\')">Open attendance report</button></div>';
         } catch (e) { el.innerHTML = errBox(e); }
