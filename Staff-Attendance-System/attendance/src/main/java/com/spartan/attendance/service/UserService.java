@@ -11,11 +11,16 @@ import com.spartan.attendance.entity.Status;
 import com.spartan.attendance.entity.User;
 import com.spartan.attendance.exception.ApiException;
 import com.spartan.attendance.repository.AttendanceRepository;
+import com.spartan.attendance.repository.CallLogRepository;
+import com.spartan.attendance.repository.PortalMessageRepository;
 import com.spartan.attendance.repository.ShopRepository;
 import com.spartan.attendance.repository.UserRepository;
 import com.spartan.attendance.security.AppUserDetails;
 import com.spartan.attendance.util.RequestInfo;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -31,6 +36,8 @@ public class UserService {
     private final PasswordEncoder passwordEncoder;
     private final AuditService auditService;
     private final ScopeService scopeService;
+    private final PortalMessageRepository messageRepository;
+    private final CallLogRepository callLogRepository;
 
     /** ADMIN/OWNER: everyone. Managers: their reporting tree. SO: only themselves. */
     @Transactional(readOnly = true)
@@ -160,11 +167,60 @@ public class UserService {
                     reports.size() + " people report to " + user.getName() + " (" + names + "). Reassign them to another manager first.");
         }
         shopRepository.unassignOfficer(id);
+        messageRepository.clearRecipient(id);
+        messageRepository.deleteBySenderId(id);
+        callLogRepository.deleteByOfficerId(id);
         long removedAttendance = attendanceRepository.deleteByUserId(id);
         auditService.log(admin.getId(), AuditAction.USER_DELETE,
                 "Deleted user " + user.getUsername() + " (" + user.getEmployeeCode() + ", " + user.getRole()
                         + ") along with " + removedAttendance + " attendance record(s)", info);
         userRepository.delete(user);
+    }
+
+    /**
+     * Sets exactly who reports directly to a manager: everyone in memberIds now reports to them, and anyone who
+     * reported to them before but is not in the list is left without a manager. Allowed pairs follow the hierarchy:
+     * Marketing Manager -> Regional Managers, Regional Manager -> Area Sales Managers, Area Sales Manager -> Sales Officers.
+     */
+    @Transactional
+    public List<UserResponse> assignTeam(AppUserDetails admin, Long managerId, List<Long> memberIds, RequestInfo info) {
+        User manager = find(managerId);
+        Role memberRole = switch (manager.getRole()) {
+            case RSM -> Role.RM;
+            case RM -> Role.ASM;
+            case ASM -> Role.SO;
+            default -> throw ApiException.badRequest("NOT_A_MANAGER",
+                    "Only a Marketing Manager, Regional Manager or Area Sales Manager has a team.");
+        };
+        Set<Long> wanted = new HashSet<>(memberIds == null ? List.of() : memberIds);
+        List<String> added = new ArrayList<>();
+        List<String> removed = new ArrayList<>();
+        for (Long id : wanted) {
+            User m = find(id);
+            if (m.getRole() != memberRole) {
+                throw ApiException.badRequest("WRONG_ROLE", m.getName() + " is not a " + MessageService.ROLE_TITLE.get(memberRole)
+                        + " - a " + MessageService.ROLE_TITLE.get(manager.getRole()) + "'s team is made of "
+                        + MessageService.ROLE_TITLE.get(memberRole) + "s.");
+            }
+            if (m.getReportingManager() == null || !m.getReportingManager().getId().equals(managerId)) {
+                m.setReportingManager(resolveManager(managerId, m.getId()));
+                userRepository.save(m);
+                added.add(m.getName());
+            }
+        }
+        for (User m : userRepository.findDirectReports(managerId)) {
+            if (!wanted.contains(m.getId()) && m.getRole() == memberRole) {
+                m.setReportingManager(null);
+                userRepository.save(m);
+                removed.add(m.getName());
+            }
+        }
+        if (!added.isEmpty() || !removed.isEmpty()) {
+            auditService.log(admin.getId(), AuditAction.TEAM_ASSIGN, "Team of " + manager.getName() + " ("
+                    + manager.getEmployeeCode() + "): added " + (added.isEmpty() ? "-" : String.join(", ", added))
+                    + "; removed " + (removed.isEmpty() ? "-" : String.join(", ", removed)), info);
+        }
+        return userRepository.findDirectReports(managerId).stream().map(UserResponse::from).toList();
     }
 
     // ---- helpers ----
