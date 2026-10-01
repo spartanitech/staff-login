@@ -614,8 +614,9 @@
             '<label>Region<select id="ts-region">' + ['', 'North', 'South', 'East', 'West'].map(function (r) {
                 return '<option value="' + r + '"' + ((s.region || '') === r ? ' selected' : '') + '>' + (r ? r + ' Region' : '—') + '</option>';
             }).join('') + '</select></label>' +
-            '<label>Phone<input id="ts-phone" value="' + esc(s.phone || '') + '" inputmode="tel" maxlength="20"></label>' +
-            '<label style="grid-column:1/-1;">Address<input id="ts-address" value="' + esc(s.address || '') + '" maxlength="255"></label>' +
+            '<label>Mobile number<input id="ts-phone" value="' + esc(s.phone || '') + '" inputmode="tel" maxlength="20"></label>' +
+            '<label style="grid-column:1/-1;">Full address<input id="ts-address" value="' + esc(s.address || '') + '" maxlength="255"></label>' +
+            '<label style="grid-column:1/-1;">Product categories</label>' + SO.categoryPickerHtml('ts', s.productCategories || '') +
             '<label style="grid-column:1/-1;">Shop location * (latitude, longitude — paste from Google Maps, or stand at the shop and tap 📍)' +
             '<span style="display:flex;gap:8px;flex-wrap:wrap;"><input id="ts-loc" value="' + esc(loc) + '" placeholder="13.0418, 80.2341" style="flex:1;min-width:180px;">' +
             '<button type="button" class="sos-btn" onclick="SOReports.useMyLocation()">📍 Use my location</button></span></label>' +
@@ -632,7 +633,9 @@
         box.innerHTML = (S.team && S.team.length ? shopForm(editing)
                 : '<div class="sos-card"><div class="sos-empty">No active Sales Officer reports to you yet. Ask the Admin to set you as their reporting manager.</div></div>') +
             '<div class="sos-card"><div class="sos-head"><div><div class="sos-title">Shops of your team</div>' +
-            '<div class="sos-sub">Each Sales Officer sees only the shops assigned to them here</div></div></div>' +
+            '<div class="sos-sub">Each Sales Officer sees only the shops assigned to them here</div></div>' +
+            '<span style="display:flex;gap:6px;"><button class="sos-btn" onclick="SOReports.exportTeamShops(\'pdf\')">📄 PDF</button>' +
+            '<button class="sos-btn" onclick="SOReports.exportTeamShops(\'excel\')">📊 Excel</button></span></div>' +
             '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">' +
             '<input type="search" class="sos-search" style="flex:2;min-width:200px;" placeholder="Search shop by name…" value="' + esc(T.q) + '" oninput="SOReports.teamSearch(this.value)">' +
             '<select class="sos-search" style="flex:1;min-width:160px;padding-left:12px;background-image:none;" onchange="SOReports.teamFilter(this.value)">' + officerOptions(T.officerFilter, 'All Sales Officers') + '</select></div>' +
@@ -649,13 +652,14 @@
         });
         if (!S.teamShops.length) { box.innerHTML = '<div class="sos-empty">No shops yet. Add the first one above.</div>'; return; }
         box.innerHTML = '<div class="sos-count">' + list.length + ' of ' + S.teamShops.length + ' shops</div>' +
-            '<table class="sos-tbl"><thead><tr><th>Shop</th><th>Sales Officer</th><th>City / Locality</th><th>Region</th><th>Phone</th><th></th></tr></thead><tbody>' +
+            '<table class="sos-tbl"><thead><tr><th>Shop</th><th>Sales Officer</th><th>City / Locality</th><th>Mobile</th><th>Address</th><th>Categories</th><th></th></tr></thead><tbody>' +
             list.map(function (s) {
                 return '<tr><td data-l="Shop"><b>' + esc(s.name) + '</b><div class="sos-sub">' + esc(s.code) + (s.status === 'INACTIVE' ? ' · inactive' : '') + '</div></td>' +
                     '<td data-l="Sales Officer">' + esc(s.assignedOfficerName || '— unassigned —') + '</td>' +
                     '<td data-l="City / Locality">' + esc([s.city, s.locality].filter(Boolean).join(' · ') || '—') + '</td>' +
-                    '<td data-l="Region">' + esc(s.region || '—') + '</td>' +
-                    '<td data-l="Phone">' + esc(s.phone || '—') + '</td>' +
+                    '<td data-l="Mobile">' + (s.phone ? '<a href="tel:' + esc(s.phone) + '">' + esc(s.phone) + '</a>' : '—') + '</td>' +
+                    '<td data-l="Address">' + esc(s.address || '—') + '</td>' +
+                    '<td data-l="Categories">' + (s.productCategories ? SO.categoryChips(s.productCategories) : '—') + '</td>' +
                     '<td><span style="display:flex;gap:6px;justify-content:flex-end;">' +
                     '<button class="sos-btn" onclick="SOReports.editShop(' + s.id + ')">✏️ Edit</button>' +
                     '<button class="sos-btn danger" onclick="SOReports.deleteShop(' + s.id + ')">🗑</button></span></td></tr>';
@@ -670,7 +674,8 @@
                 name: v('ts-name'), assignedOfficerId: v('ts-officer') ? Number(v('ts-officer')) : null,
                 city: v('ts-city'), locality: v('ts-locality'), region: v('ts-region'), phone: v('ts-phone'), address: v('ts-address'),
                 latitude: loc.length >= 2 ? loc[0] : null, longitude: loc.length >= 2 ? loc[1] : null,
-                allowedRadiusMeters: v('ts-radius') ? Number(v('ts-radius')) : null
+                allowedRadiusMeters: v('ts-radius') ? Number(v('ts-radius')) : null,
+                productCategories: SO.pickedCats('ts') || ''
             },
             locOk: loc.length >= 2 && isFinite(loc[0]) && isFinite(loc[1]) && Math.abs(loc[0]) <= 90 && Math.abs(loc[1]) <= 180
         };
@@ -702,6 +707,55 @@
             if (btn) btn.disabled = false;
             bad(H.errText(e));
         }
+    }
+
+    // ---- shop list export (PDF / Excel): every synced detail, the same as on screen
+    function shopExportRows(list) {
+        return list.map(function (s, i) {
+            return [i + 1, s.name || '', s.code || '', s.assignedOfficerName || s.owner || '', [s.city, s.locality].filter(Boolean).join(' / '),
+                s.phone || s.mobile || '', s.address || '', String(s.productCategories || s.categories || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean).join(', ')];
+        });
+    }
+    var SHOP_HEAD = ['No.', 'Shop', 'Code', 'Sales Officer', 'City / Locality', 'Mobile', 'Address', 'Product categories'];
+    async function exportShops(list, title, type) {
+        var rows = shopExportRows(list), file = title.replace(/[^A-Za-z0-9]+/g, '-') + '-' + H.todayIso();
+        if (type === 'pdf') {
+            if (!global.jspdf) { global.alert('PDF library did not load. Check your connection.'); return; }
+            var pdf = new global.jspdf.jsPDF({ orientation: 'landscape' });
+            pdf.setFontSize(14); pdf.setTextColor(20, 30, 60); pdf.text('SPARTAN BRISK & NUTS — ' + title, 12, 14);
+            pdf.setFontSize(8.5); pdf.setTextColor(90, 90, 90); pdf.text(rows.length + ' shops · ' + H.fmtLong(H.todayIso()), 12, 20);
+            var cx = [12, 22, 70, 92, 124, 160, 186, 246], w = [9, 46, 21, 31, 35, 25, 58, 40], y = 28;
+            function head() {
+                pdf.setFontSize(8); pdf.setTextColor(20, 30, 60); pdf.setFont(undefined, 'bold');
+                SHOP_HEAD.forEach(function (t, i) { pdf.text(t, cx[i], y); });
+                pdf.setFont(undefined, 'normal'); y += 2; pdf.setDrawColor(190); pdf.line(12, y, 286, y); y += 4;
+            }
+            head();
+            rows.forEach(function (r) {
+                var cells = r.map(function (v, i) { return pdf.splitTextToSize(String(v || '-'), w[i]); });
+                var hgt = Math.max.apply(null, cells.map(function (c) { return c.length; })) * 3.6;
+                if (y + hgt > 200) { pdf.addPage(); y = 16; head(); }
+                pdf.setFontSize(7.5); pdf.setTextColor(50, 50, 50);
+                cells.forEach(function (c, i) { pdf.text(c, cx[i], y); });
+                y += hgt + 1.5;
+            });
+            if (!rows.length) { pdf.setFontSize(9); pdf.text('No shops.', 12, y); }
+            pdf.save(file + '.pdf');
+            return;
+        }
+        if (!global.ExcelJS) { global.alert('Excel library did not load. Check your connection.'); return; }
+        var wb = new global.ExcelJS.Workbook(), ws = wb.addWorksheet('Shops');
+        ws.columns = [6, 30, 10, 18, 22, 14, 44, 36].map(function (w) { return { width: w }; });
+        ws.mergeCells('A1:H1'); ws.getCell('A1').value = 'SPARTAN BRISK & NUTS — ' + title; ws.getCell('A1').font = { size: 14, bold: true };
+        ws.addRow([rows.length + ' shops', '', '', '', '', '', H.fmtLong(H.todayIso())]);
+        var hr = ws.addRow(SHOP_HEAD); hr.font = { bold: true };
+        hr.eachCell(function (c) { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCE8F7' } }; });
+        rows.forEach(function (r) { var row = ws.addRow(r); row.alignment = { vertical: 'top', wrapText: true }; });
+        var buf = await wb.xlsx.writeBuffer();
+        var a = doc.createElement('a');
+        a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        a.download = file + '.xlsx'; doc.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
     }
 
     async function deleteShop(id) {
@@ -775,6 +829,7 @@
             await H.api().setTarget({ officerId: uid, month: T.month, amount: amt });
             H.toast('Target saved: ' + inr(amt));
             await renderTeamTargets();
+            pullTeamTargets().catch(function () { /* ignore */ });
         } catch (e) { H.toast(H.errText(e), true); }
     }
 
@@ -793,6 +848,122 @@
         }
         item('asm2-nav-teamshops', 'Team Shops', '<path d="M4 9.5 5.6 4h12.8L20 9.5"/><path d="M4 9.5h16v2a2.7 2.7 0 0 1-5.3 0 2.7 2.7 0 0 1-5.4 0 2.7 2.7 0 0 1-5.3 0z"/><path d="M5.5 13.5V20h13v-6.5"/><path d="M10 20v-4h4v4"/>', function () { openTeam('shops'); });
         item('asm2-nav-teamtargets', 'Targets vs Sales', '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>', function () { openTeam('targets'); });
+    }
+
+    // =========================================================================================== targets: server only
+    // Every target screen of the dashboard (ASM "Team Targets", the target box on an officer's page, the SO card) used
+    // to keep the target only in this browser (localStorage), so a target the ASM typed never reached the Sales
+    // Officer's phone. Now every save goes to PUT /api/targets and every screen is refreshed from the server first.
+    function isManager() { return !!(S.user && ['ASM', 'RM', 'RSM', 'ADMIN', 'OWNER'].indexOf(S.user.role) >= 0); }
+    function thisMonth() { return H.monthKey(H.todayIso()); }
+    function localOfficers() { try { return soOfficers || []; } catch (e) { return []; } } // eslint-disable-line no-undef
+    function saveLocal() { try { saveSOOfficers(); } catch (e) { /* ignore */ } }          // eslint-disable-line no-undef
+    function redrawTargets() {
+        try { syncAllowedOfficerLists(); } catch (e) { /* ignore */ }  // eslint-disable-line no-undef
+        try { renderASM2PerfTable(); } catch (e) { /* ignore */ }      // eslint-disable-line no-undef
+        try { if (SO.isSO()) renderSOKPIs(); } catch (e) { /* ignore */ } // eslint-disable-line no-undef
+    }
+    function applyTarget(o, amount) {
+        o.monthlyTarget = amount;
+        var a = Number(o.achieved) || 0;
+        o.remaining = Math.max(0, amount - a);
+        o.pct = amount ? Math.round(a * 100 / amount) : 0;
+    }
+    async function serverIdFor(o) {
+        if (!o) return undefined;
+        if (o._uid) return o._uid;
+        try { await loadTeam(); } catch (e) { return undefined; }
+        var hit = (S.team || []).find(function (u) { return nameEq(u.name, o.name); });
+        if (hit) o._uid = hit.id;
+        return hit ? hit.id : undefined;
+    }
+
+    /** Manager saves an officer's target for this month on the server (and mirrors it locally for the old screens). */
+    async function pushTarget(o, amount) {
+        var id = await serverIdFor(o);
+        if (!id) throw new Error((o && o.name ? o.name : 'This officer') + ' has no portal login yet, so the target cannot be saved.');
+        await H.api().setTarget({ officerId: id, month: thisMonth(), amount: amount });
+        applyTarget(o, amount);
+        saveLocal();
+    }
+
+    /** Managers: this month's targets of the team, from the server, onto the dashboard's officer records. */
+    async function pullTeamTargets() {
+        if (!isManager()) return;
+        var list = (await H.api().teamTargets(thisMonth())) || [];
+        localOfficers().forEach(function (o) {
+            var t = list.find(function (x) { return (o._uid && x.officerId === o._uid) || nameEq(x.officerName, o.name); });
+            if (t) o._uid = t.officerId;
+            applyTarget(o, t ? Number(t.amount) || 0 : 0);
+        });
+        saveLocal();
+        redrawTargets();
+    }
+
+    /** Sales Officer: my own target for this month, from the server. */
+    async function pullMyTarget() {
+        if (!SO.isSO()) return;
+        var t = await H.api().target({ month: thisMonth() });
+        var o = H.officerRec();
+        if (o) { applyTarget(o, t ? Number(t.amount) || 0 : 0); saveLocal(); }
+        redrawTargets();
+    }
+
+    function readAmount(id) {
+        var el = $(id);
+        return el ? Math.max(0, Math.round(Number(String(el.value || '').replace(/[^0-9.]/g, '')) || 0)) : 0;
+    }
+
+    function installTargetOverrides() {
+        // ASM / RM / Marketing Manager: "Team Targets" screen — refresh from the server before showing it
+        var origShow = global.showMgrTargets;
+        if (typeof origShow === 'function' && !origShow.__sos) {
+            var show = function () {
+                var args = arguments, self = this;
+                var out = origShow.apply(self, args);
+                pullTeamTargets().then(function () { origShow.apply(self, args); })
+                    .catch(function (e) { H.toast('Could not load targets: ' + H.errText(e), true); });
+                return out;
+            };
+            show.__sos = true;
+            global.showMgrTargets = show;
+        }
+        // ... and the pencil ✎ Save on a row of it
+        var origSaveMgr = global.saveMgrTarget;
+        if (typeof origSaveMgr === 'function' && !origSaveMgr.__sos) {
+            var saveMgr = async function (name) {
+                var amount = readAmount('mgr-tgt-edit-input');
+                var o = localOfficers().find(function (x) { return x.name === name; });
+                try {
+                    await pushTarget(o, amount);
+                    H.toast('Target saved for ' + name + ': ' + inr(amount));
+                } catch (e) { H.toast(H.errText(e), true); return; }
+                try { cancelMgrTargetEdit(); } catch (e) { /* ignore */ } // eslint-disable-line no-undef
+                redrawTargets();
+            };
+            saveMgr.__sos = true;
+            global.saveMgrTarget = saveMgr;
+        }
+        // the target box on an officer's own page (opened by the officer, or by a manager looking at that officer)
+        ['saveSOTarget', 'soSaveTarget'].forEach(function (fn) {
+            var orig = global[fn];
+            if (typeof orig !== 'function' || orig.__sos) return;
+            var inputId = fn === 'saveSOTarget' ? 'so-my-tgt-target' : 'so-tgt-target';
+            var w = async function () {
+                if (!isManager()) { H.toast('Your monthly target is set by your Area Sales Manager.', true); return; }
+                var o = H.officerRec();
+                var amount = readAmount(inputId);
+                try {
+                    await pushTarget(o, amount);
+                    H.toast('Target saved for ' + (o ? o.name : 'officer') + ': ' + inr(amount));
+                } catch (e) { H.toast(H.errText(e), true); return; }
+                var out = orig.apply(this, arguments);   // the old screen re-draws itself with the saved value
+                redrawTargets();
+                return out;
+            };
+            w.__sos = true;
+            global[fn] = w;
+        });
     }
 
     // =========================================================================================== wiring
@@ -828,6 +999,14 @@
             if (u && c && !c.value.trim() && u.area) c.value = u.area;
         },
         saveShop: saveShop,
+        exportShops: exportShops,
+        exportTeamShops: function (type) {
+            var q = (T.q || '').toLowerCase();
+            var list = (S.teamShops || []).filter(function (s) {
+                return (!q || s.name.toLowerCase().indexOf(q) >= 0) && (!T.officerFilter || String(s.assignedOfficerId) === String(T.officerFilter));
+            });
+            exportShops(list, 'Team Shops', type).catch(function (e) { H.toast(H.errText(e), true); });
+        },
         deleteShop: deleteShop,
         useMyLocation: useMyLocation,
         saveTarget: saveTarget
@@ -840,11 +1019,15 @@
     (global.SOSalesParts = global.SOSalesParts || []).push({
         onSignedIn: function (user) {
             wrapTargets();
+            installTargetOverrides();
+            if (user && user.role === 'SO') pullMyTarget().catch(function () { /* the card shows the error */ });
+            else pullTeamTargets().catch(function () { /* managers can still open Targets vs Sales */ });
             if (user && user.role === 'SO') renderPerformanceCard();
             if (user && ['ASM', 'RM', 'RSM'].indexOf(user.role) >= 0) mountManagerNav();
         },
         refresh: renderPerformanceCard
     });
     wrapTargets();
+    installTargetOverrides();
     mountManagerNav();
 })(window);

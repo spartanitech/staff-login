@@ -74,7 +74,7 @@ function createMock() {
 
     const shopResp = sh => { const o = S.users.find(u => u.id === sh.assignedOfficerId); const c = S.users.find(u => u.id === sh.createdById);
         return { city: null, createdById: null, ...sh, assignedOfficerName: o ? o.name : null, createdByName: c ? c.name : null }; };
-    S.dp = []; S.stock = []; S.targets = []; S.seq.stock = 0;
+    S.dp = []; S.stock = []; S.targets = []; S.seq.stock = 0; S.reports = [];
 
     class ApiErr extends Error { constructor(status, code, message, details) { super(message); Object.assign(this, { status, code, details }); } }
     const bad = (code, msg, d) => new ApiErr(400, code, msg, d);
@@ -186,6 +186,17 @@ function createMock() {
             const ph = S.photos.get(a.id); if (!ph) throw new ApiErr(404, 'NOT_FOUND', 'There is no photo for this record.');
             return [200, ph.data, ph.type];
         }
+        if (method === 'POST' && p === '/api/shops/mine') {   // ShopService.createOwn
+            need('SO');
+            if (!body.name || !String(body.name).trim()) throw bad('VALIDATION_FAILED', 'Shop name is required');
+            if (typeof body.latitude !== 'number' || typeof body.longitude !== 'number') throw bad('VALIDATION_FAILED', 'latitude is required');
+            if (S.shops.some(x => x.assignedOfficerId === caller.id && x.name.toLowerCase() === body.name.trim().toLowerCase())) throw new ApiErr(409, 'SHOP_NAME_TAKEN', `This Sales Officer already has a shop called '${body.name.trim()}'.`);
+            let n = S.shops.length + 1, code; do { code = 'SHP' + String(n++).padStart(3, '0'); } while (S.shops.some(x => x.code === code));
+            const sh = { id: ++S.seq.shop, code, status: 'ACTIVE', createdById: caller.id, name: body.name.trim(), locality: body.locality || null, region: body.region || null,
+                city: body.city || null, address: body.address || null, phone: body.phone || null, productCategories: body.productCategories || null,
+                latitude: body.latitude, longitude: body.longitude, allowedRadiusMeters: 50, assignedOfficerId: caller.id, createdAt: nowLdt() };
+            S.shops.push(sh); return [201, shopResp(sh)];
+        }
         if (method === 'GET' && p === '/api/shops/mine') { need('SO'); return [200, S.shops.filter(x => x.status === 'ACTIVE' && x.assignedOfficerId === caller.id).map(shopResp)]; }
         if (method === 'POST' && p === '/api/attendance/check-in') {
             if (caller.role === 'SO') throw bad('SHOP_CHECKIN_REQUIRED', 'Sales Officers mark attendance at one of their assigned shops, with a live photo of the shop.');
@@ -226,7 +237,7 @@ function createMock() {
                 if (!o || o.role !== 'SO' || o.status !== 'ACTIVE') throw bad('INVALID_OFFICER', 'A shop can only be assigned to an active Sales Officer.');
             };
             const dup = (b, id) => { if (S.shops.some(x => x.id !== id && x.assignedOfficerId === b.assignedOfficerId && x.name.toLowerCase() === b.name.trim().toLowerCase())) throw new ApiErr(409, 'SHOP_NAME_TAKEN', `This Sales Officer already has a shop called '${b.name.trim()}'.`); };
-            const fields = b => ({ name: b.name.trim(), locality: b.locality || null, region: b.region || null, city: b.city || null, address: b.address || null, phone: b.phone || null,
+            const fields = b => ({ name: b.name.trim(), locality: b.locality || null, region: b.region || null, city: b.city || null, address: b.address || null, phone: b.phone || null, productCategories: b.productCategories || null,
                 latitude: b.latitude, longitude: b.longitude, allowedRadiusMeters: b.allowedRadiusMeters == null ? 50 : b.allowedRadiusMeters, assignedOfficerId: b.assignedOfficerId });
             if (method === 'POST' && p === '/api/team/shops') {
                 checkTeam(body); dup(body);
@@ -258,6 +269,10 @@ function createMock() {
             const to = q.to || todayIso(), from = q.from || addDays(to, -6);
             return [200, S.stock.filter(e => e.officerId === who && e.date >= from && e.date <= to).sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id)];
         }
+        if (method === 'GET' && p === '/api/stock/team') {   // StockService.team
+            const ids = scopeIds(caller); const to = q.to || todayIso(), from = q.from || to.slice(0, 8) + '01';
+            return [200, S.stock.filter(e => (!ids || ids.has(e.officerId)) && e.date >= from && e.date <= to).sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id)];
+        }
         if (method === 'GET' && p === '/api/stock/openings') {
             const who = q.officerId ? Number(q.officerId) : caller.id; visibleUser(who);
             const lb = latestBefore(who, q.date || todayIso()); const out = {}; Object.keys(lb).forEach(k => { out[k] = lb[k].closing; }); return [200, out];
@@ -278,13 +293,28 @@ function createMock() {
             }
             staged.forEach(x => {
                 const e = x.ex || (S.stock.push({ id: ++S.seq.stock, officerId: caller.id, date, product: x.product, unitPrice: 0, dpName: null, category: null }), S.stock[S.stock.length - 1]);
-                Object.assign(e, { opening: x.opening, receipt: x.rc, soSales: x.so, dpSales: x.dp, closing: x.closing });
+                Object.assign(e, { opening: x.opening, receipt: x.rc, totalStock: x.opening + x.rc, soSales: x.so, dpSales: x.dp, totalSales: x.so + x.dp, closing: x.closing });
                 if (x.r.category) e.category = x.r.category; if (x.r.unitPrice != null) e.unitPrice = x.r.unitPrice; if (body.dpName) e.dpName = body.dpName;
                 let carry = x.closing;
                 S.stock.filter(l => l.officerId === caller.id && l.product === x.product && l.date > date).sort((a, b) => a.date.localeCompare(b.date))
-                    .forEach(l => { l.opening = carry; l.closing = carry + l.receipt - l.soSales - l.dpSales; carry = l.closing; });
+                    .forEach(l => { l.opening = carry; l.totalStock = carry + l.receipt; l.totalSales = l.soSales + l.dpSales; l.closing = l.totalStock - l.totalSales; carry = l.closing; });
             });
             return [200, S.stock.filter(e => e.officerId === caller.id && e.date === date)];
+        }
+        // ---- Daily Shop Report (DailyReportService)
+        if (p === '/api/daily-reports' && method === 'GET') {
+            const who = q.officerId ? Number(q.officerId) : caller.id; visibleUser(who); const date = q.date || todayIso();
+            const r = S.reports.find(x => x.officerId === who && x.date === date);
+            return [200, r ? { ...r } : { officerId: who, date, header: {}, rows: {}, updatedAt: null }];
+        }
+        if (method === 'PUT' && (m = /^\/api\/daily-reports\/(\d{4}-\d{2}-\d{2})$/.exec(p))) {
+            if (caller.role !== 'SO') throw new ApiErr(403, 'NOT_A_SALES_OFFICER', 'Only a Sales Officer fills a Daily Shop Report.');
+            if (m[1] > todayIso()) throw bad('FUTURE_DATE', 'A report cannot be saved for a future date.');
+            if (!body || typeof body.header !== 'object' || typeof body.rows !== 'object') throw bad('VALIDATION_FAILED', 'header is required');
+            let r = S.reports.find(x => x.officerId === caller.id && x.date === m[1]);
+            if (!r) { r = { officerId: caller.id, date: m[1] }; S.reports.push(r); }
+            Object.assign(r, { header: body.header, rows: body.rows, updatedAt: nowLdt() });
+            return [200, { ...r }];
         }
         const curMonth = () => todayIso().slice(0, 7);
         const tResp = t => { const o = S.users.find(u => u.id === t.officerId), b = S.users.find(u => u.id === t.setById); return { officerId: t.officerId, officerName: o.name, month: t.month, amount: t.amount, setByName: b ? b.name : null }; };

@@ -120,6 +120,10 @@
             '.sos-shop-act{display:flex;gap:6px;flex-shrink:0}.sos-btn{padding:6px 11px;font-size:11.5px;font-weight:700;border-radius:8px;border:1px solid #04344C;background:#fff;color:#04344C;cursor:pointer;font-family:inherit;white-space:nowrap}',
             '.sos-btn.pri{background:#04344C;color:#fff}.sos-btn.danger{border-color:#C0392B;color:#C0392B}.sos-btn:disabled{opacity:.5;cursor:default}',
             '.sos-empty{padding:18px 8px;text-align:center;color:#6B7A90;font-size:12.5px}',
+            '.sos-shop-cats{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}.sos-chip{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;background:#EAF1FC;color:#2E4A9E}',
+            '.sos-badge-pending{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;background:#FFF3C4;color:#8A5F14;margin-left:6px;white-space:nowrap}',
+            '.sos-cat-pick{display:flex;flex-wrap:wrap;gap:6px;grid-column:1/-1}.sos-cat-pick label{flex-direction:row!important;align-items:center;gap:6px!important;font-weight:600!important;padding:6px 10px;border:1px solid #D3E2F5;border-radius:999px;background:#fff;cursor:pointer;color:#04344C!important}',
+            '.sos-cat-pick input{margin:0}.sos-form .sos-wide{grid-column:1/-1}',
             '.sos-count{font-size:11.5px;color:#6B7A90;margin:8px 0 2px}',
             '.sos-dp-select{flex:1;min-width:0;border:0;padding:7px 9px;font-family:inherit;font-size:12.5px;font-weight:600;color:#0B3555;background:transparent;cursor:pointer}',
             '.sos-dp-select:focus{outline:none;background:#FFFBEF}',
@@ -220,7 +224,9 @@
             name: sh.name, locality: sh.locality || '', region: sh.region || '', city: sh.city || '',
             address: sh.address || '', phone: sh.phone || '', mobile: sh.phone || '',
             lat: sh.latitude, lng: sh.longitude, radius: sh.allowedRadiusMeters,
-            owner: sh.assignedOfficerName || '', addedBy: sh.createdByName || '', status: 'Active'
+            owner: sh.assignedOfficerName || '', addedBy: sh.createdByName || '', status: 'Active',
+            categories: sh.productCategories || '', addedAt: sh.createdAt ? Date.parse(sh.createdAt) : null,
+            _pending: !!sh._pending
         };
     }
 
@@ -230,6 +236,13 @@
         try { list = await api().myShops(); }
         catch (e) { S.shopsLoaded = true; toast('Could not load your shops: ' + errText(e), true); return; }
         S.shops = (list || []).map(toLegacy);
+        Outbox.pending('shop').forEach(function (it) {   // added offline, not on the server yet
+            var b = it.payload || {};
+            if (!S.shops.some(function (x) { return (x.name || '').toLowerCase() === String(b.name || '').toLowerCase(); })) {
+                S.shops.push(toLegacy({ code: 'PENDING-' + it.id, name: b.name, locality: b.locality, city: b.city, region: b.region, address: b.address,
+                    phone: b.phone, productCategories: b.productCategories, latitude: b.latitude, longitude: b.longitude, allowedRadiusMeters: 50, _pending: true }));
+            }
+        });
         S.shopsLoaded = true;
 
         var o = officerRec();
@@ -279,9 +292,13 @@
         var hasPin = s.lat != null && s.lng != null && !(Number(s.lat) === 0 && Number(s.lng) === 0);
         return '<div class="sos-shop">' +
             '<div class="sos-shop-ico">🏬</div>' +
-            '<div class="sos-shop-main"><div class="sos-shop-name">' + esc(s.name) + '</div>' +
+            '<div class="sos-shop-main"><div class="sos-shop-name">' + esc(s.name) +
+            (s._pending ? ' <span class="sos-badge-pending" title="Saved on this phone; it is sent to the server as soon as you are online">⏳ waiting to sync</span>' : '') + '</div>' +
             '<div class="sos-shop-meta">' + esc(meta || '—') + (s.phone ? ' · <a href="tel:' + esc(s.phone) + '">' + esc(s.phone) + '</a>' : '') +
-            (s.addedBy ? ' · added by ' + esc(s.addedBy) : '') + '</div></div>' +
+            (s.addedBy ? ' · added by ' + esc(s.addedBy) : '') + '</div>' +
+            (s.address ? '<div class="sos-shop-meta">📍 ' + esc(s.address) + '</div>' : '') +
+            (s.categories ? '<div class="sos-shop-cats">' + categoryChips(s.categories) + '</div>' : '') +
+            '</div>' +
             '<div class="sos-shop-act">' +
             (hasPin ? '<button class="sos-btn" onclick="showLocationMap(\'' + s.lat + '\',\'' + s.lng + '\',\'' + jsq(s.name) + '\',\'' + jsq(s.locality || s.city) + '\')">📍 Map</button>' : '') +
             '<button class="sos-btn pri" onclick="openShopVisitFlowForShop(\'' + jsq(s.id) + '\')">▶ Visit</button>' +
@@ -307,8 +324,10 @@
         return '<div class="sos-card" id="sos-myshops">' +
             '<div class="sos-head"><div><div class="sos-title">🏬 My Shops</div>' +
             '<div class="sos-sub">Shops assigned to you — added by you or your Area Sales Manager</div></div>' +
-            '<span style="display:flex;gap:6px"><button class="sos-btn pri" onclick="SOSales.addShop()">➕ Add shop</button>' +
-            '<button class="sos-btn" onclick="SOSales.reloadShops()">↻ Refresh</button></span></div>' +
+            '<span style="display:flex;gap:6px;flex-wrap:wrap"><button class="sos-btn pri" onclick="SOSales.addShop()">➕ Add shop</button>' +
+            '<button class="sos-btn" onclick="SOSales.reloadShops()">↻ Refresh</button>' +
+            '<button class="sos-btn" onclick="SOReports.exportShops(SOSales.shops(), \'My Shops\', \'pdf\')">📄 PDF</button>' +
+            '<button class="sos-btn" onclick="SOReports.exportShops(SOSales.shops(), \'My Shops\', \'excel\')">📊 Excel</button></span></div>' +
             '<input type="search" class="sos-search" id="sos-shop-search" placeholder="Search shop by name…" autocomplete="off" oninput="SOSales.filterShops(this.value)">' +
             '<div class="sos-count" id="sos-shop-count"></div>' +
             '<div id="sos-shop-list"></div></div>';
@@ -346,6 +365,88 @@
         global.soAddOwnShop = function () { openAddShopForm(); };
     }
 
+    // ------------------------------------------------------------------ product categories of a shop
+    // The same category names the stock report and the sales analysis use, so a shop's categories line up with sales.
+    function productCategories() {
+        var c = global.WSR_CATALOG;
+        var list = Array.isArray(c) && c.length ? c.map(function (g) { return g.cat; }) : [];
+        return list.length ? list : ['DRY FRUITS', 'SEEDS', 'ROASTED NUTS & SEEDS', 'BERRIES', 'DATES VARIETY', 'MAKKANA VARIETIES', 'SPICES'];
+    }
+    function catLabel(c) { return String(c || '').toLowerCase().replace(/\b\w/g, function (x) { return x.toUpperCase(); }); }
+    function splitCats(v) { return String(v || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean); }
+    function categoryChips(v) { return splitCats(v).map(function (c) { return '<span class="sos-chip">' + esc(catLabel(c)) + '</span>'; }).join(''); }
+    /** Checkbox list; read it back with pickedCats(prefix). */
+    function categoryPickerHtml(prefix, selected) {
+        var sel = splitCats(selected).map(function (x) { return x.toUpperCase(); });
+        return '<div class="sos-cat-pick" id="' + prefix + '-cats">' + productCategories().map(function (c, i) {
+            return '<label><input type="checkbox" value="' + esc(c) + '"' + (sel.indexOf(c.toUpperCase()) >= 0 ? ' checked' : '') + '> ' + esc(catLabel(c)) + '</label>';
+        }).join('') + '</div>';
+    }
+    function pickedCats(prefix) {
+        var box = $(prefix + '-cats');
+        if (!box) return null;
+        return Array.prototype.slice.call(box.querySelectorAll('input:checked')).map(function (i) { return i.value; }).join(', ') || null;
+    }
+
+    // ------------------------------------------------------------------ offline outbox
+    // Work done without a connection (a new shop, a Daily Shop Report) is kept on this phone and sent the moment the
+    // server can be reached again: on the browser's "online" event, every 30 s while something is waiting, and right
+    // after the next sign-in. Only a network failure keeps an item; a real answer from the server (saved, or refused
+    // with a reason) removes it.
+    var OUTBOX_KEY = 'salesHierarchyPortal_outbox_v1';
+    var outboxHandlers = {};
+    var flushing = false;
+    function outboxAll() { try { return JSON.parse(global.localStorage.getItem(OUTBOX_KEY) || '[]'); } catch (e) { return []; } }
+    function outboxSave(list) { try { global.localStorage.setItem(OUTBOX_KEY, JSON.stringify(list)); } catch (e) { /* storage full */ } }
+    function meId() { return S.user ? S.user.id : (api() && api().currentUser && api().currentUser() ? api().currentUser().id : null); }
+    function isNetwork(e) { return !e || e.status === 0 || e.code === 'NETWORK'; }
+    var Outbox = {
+        /** Items of one kind for the signed-in user. */
+        pending: function (kind) {
+            var me = meId();
+            return outboxAll().filter(function (x) { return x.user === me && (!kind || x.kind === kind); });
+        },
+        /** Queue (or replace, when key is given) an item and try to send it straight away. */
+        add: function (kind, payload, key) {
+            var me = meId();
+            var list = outboxAll().filter(function (x) { return !(key && x.user === me && x.kind === kind && x.key === key); });
+            list.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), user: me, kind: kind, key: key || null, payload: payload, at: Date.now() });
+            outboxSave(list);
+            return Outbox.flush();
+        },
+        on: function (kind, fn) { outboxHandlers[kind] = fn; },
+        flush: async function () {
+            if (flushing || !S.user) return;
+            flushing = true;
+            var sentAny = false;
+            try {
+                var mine = Outbox.pending();
+                for (var i = 0; i < mine.length; i++) {
+                    var item = mine[i], fn = outboxHandlers[item.kind];
+                    if (!fn) continue;
+                    try {
+                        await fn(item.payload, item);
+                        sentAny = true;
+                        outboxSave(outboxAll().filter(function (x) { return x.id !== item.id; }));
+                    } catch (e) {
+                        if (isNetwork(e) || e.status === 401) break;           // still offline / signed out: try again later
+                        outboxSave(outboxAll().filter(function (x) { return x.id !== item.id; }));
+                        toast((item.kind === 'shop' ? 'Shop "' + (item.payload && item.payload.name) + '" was not saved: ' : 'Not saved: ') + errText(e), true);
+                    }
+                }
+            } finally { flushing = false; }
+            if (sentAny) {
+                if (outboxHandlers.__after) { try { outboxHandlers.__after(); } catch (e) { /* ignore */ } }
+            }
+            return sentAny;
+        }
+    };
+    global.addEventListener('online', function () { Outbox.flush(); });
+    setInterval(function () { if (S.user && Outbox.pending().length) Outbox.flush(); }, 30000);
+
+    Outbox.on('shop', function (body) { return api().createMyShop(body); });
+    Outbox.on('__after', function () { if (isSO()) { S.shopsLoaded = false; loadSOShops(); } });
+
     // ------------------------------------------------------------------ Sales Officer: add my shop (server + GPS)
     var MAX_ADD_ACCURACY_M = 100;
 
@@ -363,7 +464,10 @@
             '<label>Locality / street<input id="sos-new-loc" maxlength="120"></label>' +
             '<label>City<input id="sos-new-city" maxlength="80" value="' + esc(city) + '"></label>' +
             '<label>Region<select id="sos-new-region"><option>North</option><option>South</option><option>East</option><option>West</option></select></label>' +
-            '<label>Phone<input id="sos-new-phone" maxlength="20" inputmode="tel"></label>' +
+            '<label>Mobile number<input id="sos-new-phone" maxlength="20" inputmode="tel" placeholder="10-digit mobile"></label>' +
+            '<label class="sos-wide">Full address<input id="sos-new-address" maxlength="255" placeholder="Door no, street, area, city, pincode"></label>' +
+            '<label class="sos-wide">Product categories this shop buys</label>' +
+            categoryPickerHtml('sos-new') +
             '</div>' +
             '<div class="wsr2-actions"><button class="btn-primary" id="sos-new-save" onclick="SOSales.saveNewShop()">📍 Save at my current location</button>' +
             '<button class="btn-outline" onclick="showMyAreaShops()">Cancel</button></div>' +
@@ -401,12 +505,16 @@
             say('GPS is not accurate enough yet (±' + acc + ' m, need ±' + MAX_ADD_ACCURACY_M + ' m or better). Wait a few seconds and try again.', true);
             return;
         }
+        var phone = (($('sos-new-phone') || {}).value || '').trim();
+        if (phone && !/^[0-9+() -]{7,20}$/.test(phone)) { if (btn) btn.disabled = false; say('Mobile number looks wrong.', true); return; }
         var body = {
             name: name,
+            address: (($('sos-new-address') || {}).value || '').trim() || null,
+            productCategories: pickedCats('sos-new'),
             locality: (($('sos-new-loc') || {}).value || '').trim() || null,
             city: (($('sos-new-city') || {}).value || '').trim() || null,
             region: ($('sos-new-region') || {}).value || null,
-            phone: (($('sos-new-phone') || {}).value || '').trim() || null,
+            phone: phone || null,
             latitude: pos.coords.latitude,
             longitude: pos.coords.longitude
         };
@@ -414,8 +522,18 @@
         try {
             await api().createMyShop(body);
         } catch (e) {
-            if (btn) btn.disabled = false;
-            say(errText(e), true);
+            if (!isNetwork(e)) {
+                if (btn) btn.disabled = false;
+                say(errText(e), true);
+                return;
+            }
+            // No connection: keep it on this phone and send it as soon as the server can be reached.
+            Outbox.add('shop', body, 'shop:' + name.toLowerCase());
+            toast('No connection — "' + name + '" is saved on this phone and will sync automatically');
+            S.shops.push(toLegacy({ code: 'PENDING-' + Date.now(), name: name, locality: body.locality, city: body.city, region: body.region,
+                address: body.address, phone: body.phone, productCategories: body.productCategories, latitude: body.latitude, longitude: body.longitude,
+                allowedRadiusMeters: 50, _pending: true }));
+            if (typeof global.showMyAreaShops === 'function') global.showMyAreaShops();
             return;
         }
         toast('Shop "' + name + '" added — you can check in there now');
@@ -494,6 +612,11 @@
         isSO: isSO,
         filterShops: function (q) { renderMyShopList(q); },
         addShop: function () { openAddShopForm(); },
+        outbox: Outbox,
+        categoryPickerHtml: categoryPickerHtml,
+        pickedCats: pickedCats,
+        categoryChips: categoryChips,
+        productCategories: productCategories,
         saveNewShop: saveNewShop,
         reloadShops: function () { S.shopsLoaded = false; renderMyShopList(''); return loadSOShops(); },
         shops: function () { return S.shops.slice(); },
@@ -515,7 +638,9 @@
         doc.body.classList.toggle('sos-so', user && user.role === 'SO');
         purgeDemoShops();
         loadDp();
-        if (user && user.role === 'SO') loadSOShops();
+        if (user && user.role === 'SO') {
+            Outbox.flush().then(function () { return loadSOShops(); }).catch(function () { loadSOShops(); });
+        }
         if (global.SOSalesParts) global.SOSalesParts.forEach(function (p) { if (p.onSignedIn) { try { p.onSignedIn(user); } catch (e) { console.warn(e); } } });
     }
     function renderPerformanceCard() {

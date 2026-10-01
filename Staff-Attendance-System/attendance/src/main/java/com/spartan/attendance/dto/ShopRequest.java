@@ -23,5 +23,6 @@ public record ShopRequest(
         @Min(value = 10, message = "Radius must be at least 10 m") @Max(value = 500, message = "Radius cannot exceed 500 m") Integer allowedRadiusMeters,
         Long assignedOfficerId,
         Status status,
-        @Size(max = 80) String city) {
+        @Size(max = 80) String city,
+        @Size(max = 255) String productCategories) {
 }

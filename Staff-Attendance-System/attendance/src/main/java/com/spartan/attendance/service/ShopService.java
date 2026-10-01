@@ -74,6 +74,7 @@ public class ShopService {
                 .city(clean(req.city()))
                 .address(clean(req.address()))
                 .phone(clean(req.phone()))
+                .productCategories(clean(req.productCategories()))
                 .latitude(req.latitude())
                 .longitude(req.longitude())
                 .allowedRadiusMeters(radius(req))
@@ -104,6 +105,9 @@ public class ShopService {
         }
         s.setAddress(clean(req.address()));
         s.setPhone(clean(req.phone()));
+        if (req.productCategories() != null) {   // older clients don't send it - keep what is there
+            s.setProductCategories(clean(req.productCategories()));
+        }
         s.setLatitude(req.latitude());
         s.setLongitude(req.longitude());
         s.setAllowedRadiusMeters(radius(req));
@@ -153,7 +157,7 @@ public class ShopService {
     public ShopResponse createOwn(AppUserDetails officer, ShopRequest req, RequestInfo info) {
         rejectDuplicateName(req.name(), officer.getId(), null);
         ShopRequest own = new ShopRequest(null, req.name(), req.locality(), req.region(), req.address(), req.phone(),
-                req.latitude(), req.longitude(), null, officer.getId(), Status.ACTIVE, req.city());
+                req.latitude(), req.longitude(), null, officer.getId(), Status.ACTIVE, req.city(), req.productCategories());
         return create(officer, own, info);
     }
 
@@ -242,7 +246,7 @@ public class ShopService {
     /** Managers never pick shop codes; the server generates them. */
     private static ShopRequest stripCode(ShopRequest r) {
         return new ShopRequest(null, r.name(), r.locality(), r.region(), r.address(), r.phone(), r.latitude(), r.longitude(),
-                r.allowedRadiusMeters(), r.assignedOfficerId(), r.status(), r.city());
+                r.allowedRadiusMeters(), r.assignedOfficerId(), r.status(), r.city(), r.productCategories());
     }
 
     private Shop find(Long id) {

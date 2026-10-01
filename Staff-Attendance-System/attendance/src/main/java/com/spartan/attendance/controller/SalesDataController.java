@@ -62,6 +62,15 @@ public class SalesDataController {
         return stockService.list(caller, officerId, from, to);
     }
 
+    @Operation(summary = "Stock entries of everyone I may see (my team; everyone for Admin/Owner) between two dates "
+            + "(default: this month). The sales feed for Sales Analysis and the manager dashboards.")
+    @GetMapping("/stock/team")
+    public List<StockEntryResponse> teamStock(@AuthenticationPrincipal AppUserDetails caller,
+                                              @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                                              @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        return stockService.team(caller, from, to);
+    }
+
     @Operation(summary = "Opening stock per product for a day (= the previous day's closing)")
     @GetMapping("/stock/openings")
     public Map<String, Integer> openings(@AuthenticationPrincipal AppUserDetails caller,

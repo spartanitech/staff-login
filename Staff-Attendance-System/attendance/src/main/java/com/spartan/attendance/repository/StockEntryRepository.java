@@ -20,6 +20,9 @@ public interface StockEntryRepository extends JpaRepository<StockEntry, Long> {
             + "and e2.product = e.product and e2.entryDate < :date)")
     List<StockEntry> findLatestBefore(@Param("officerId") Long officerId, @Param("date") LocalDate date);
 
+    @Query("select e from StockEntry e join fetch e.officer where e.entryDate between :from and :to order by e.entryDate asc, e.id asc")
+    List<StockEntry> findAllBetween(@Param("from") LocalDate from, @Param("to") LocalDate to);
+
     boolean existsByOfficerIdAndEntryDateAndProduct(Long officerId, LocalDate date, String product);
 
     List<StockEntry> findByOfficerIdAndProductAndEntryDateAfterOrderByEntryDateAsc(Long officerId, String product, LocalDate date);

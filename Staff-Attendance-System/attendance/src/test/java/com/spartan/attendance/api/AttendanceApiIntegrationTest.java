@@ -651,4 +651,56 @@ class AttendanceApiIntegrationTest {
                         "{\"rows\":[{\"product\":\"Almond 250g\",\"receipt\":0,\"soSales\":500,\"dpSales\":0}]}"))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("STOCK_NEGATIVE"));
     }
+
+    // ------------------------------------------------------------------ Daily Shop Report, team sales feed, shop categories
+
+    @Test
+    void dailyShopReportIsStoredPerOfficerAndDayAndReadableByTheirManagerOnly() throws Exception {
+        Officer o = newOfficer("dsr", 12.2, 79.2, 50);
+        String body = "{\"header\":{\"hq\":\"Madurai\",\"startKm\":\"120\"},\"rows\":{\"Shop dsr\":{\"type\":\"GS\",\"value\":\"450\"}}}";
+        mvc.perform(auth(put("/api/daily-reports/2026-01-05"), o.token()).content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.header.hq").value("Madurai"))
+                .andExpect(jsonPath("$.rows['Shop dsr'].value").value("450"));
+        mvc.perform(auth(get("/api/daily-reports?date=2026-01-05"), o.token())).andExpect(status().isOk())
+                .andExpect(jsonPath("$.header.startKm").value("120"))
+                .andExpect(jsonPath("$.updatedAt").exists());
+        // an empty day is an empty report, not an error
+        mvc.perform(auth(get("/api/daily-reports?date=2026-01-06"), o.token())).andExpect(status().isOk())
+                .andExpect(jsonPath("$.updatedAt").doesNotExist());
+        // the Admin can read it, another Sales Officer cannot, and only a Sales Officer writes one
+        mvc.perform(auth(get("/api/daily-reports?date=2026-01-05&officerId=" + o.userId()), adminToken())).andExpect(status().isOk())
+                .andExpect(jsonPath("$.header.hq").value("Madurai"));
+        mvc.perform(auth(get("/api/daily-reports?date=2026-01-05&officerId=" + o.userId()), login("sales02", "Sales@123")))
+                .andExpect(status().isForbidden());
+        mvc.perform(auth(put("/api/daily-reports/2026-01-05"), adminToken()).content(body)).andExpect(status().isForbidden());
+    }
+
+    @Test
+    void teamStockFeedFollowsTheReportingTree() throws Exception {
+        Officer o = newOfficer("feed", 12.3, 79.3, 50);
+        mvc.perform(auth(put("/api/stock/2026-01-05"), o.token()).content(
+                        "{\"rows\":[{\"product\":\"Walnut (100GM)\",\"opening\":10,\"receipt\":0,\"soSales\":2,\"dpSales\":1}]}"))
+                .andExpect(status().isOk());
+        mvc.perform(auth(get("/api/stock/team?from=2026-01-01&to=2026-01-31"), adminToken())).andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.officerId==" + o.userId() + " && @.product=='Walnut (100GM)')]", hasSize(1)));
+        // a Sales Officer only ever gets their own rows
+        String other = mvc.perform(auth(get("/api/stock/team?from=2026-01-01&to=2026-01-31"), login("sales02", "Sales@123")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertTrue(!other.contains("\"officerId\":" + o.userId() + ","), "a Sales Officer must not see another officer's sales");
+    }
+
+    @Test
+    void shopKeepsItsProductCategories() throws Exception {
+        Officer o = newOfficer("cats", 12.4, 79.4, 50);
+        mvc.perform(auth(post("/api/shops/mine"), o.token()).content(
+                        "{\"name\":\"Cat Shop\",\"phone\":\"9443322110\",\"address\":\"1, Main Road\",\"productCategories\":\"DRY FRUITS, SEEDS\","
+                                + "\"latitude\":12.41,\"longitude\":79.41}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.productCategories").value("DRY FRUITS, SEEDS"))
+                .andExpect(jsonPath("$.phone").value("9443322110"))
+                .andExpect(jsonPath("$.address").value("1, Main Road"));
+        mvc.perform(auth(get("/api/shops/mine"), o.token())).andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.name=='Cat Shop')].productCategories", hasSize(1)));
+    }
 }

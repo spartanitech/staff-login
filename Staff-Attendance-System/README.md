@@ -160,3 +160,23 @@ Everything below is stored in MySQL (Hibernate `ddl-auto=update` creates the new
 * Browser test: `scripts/ui-test/so-sales-e2e.js` (33 checks against the mock API).
 * Note: `SEED_DEMO_USERS=true` (the non-prod default) still seeds 7 demo shops into the database on an empty `shops` table;
   production (`SPRING_PROFILES_ACTIVE=prod`) does not. Delete any leftover demo shops from Admin → Shops.
+
+## Live dashboards, Daily Shop Report and shop details on the server (portal-live.js)
+* **Sales = SO Sales + DP Sales × price** from every Sales Officer's Weekly Stock Report. `GET /api/stock/team?from&to`
+  returns the stock rows of everyone the caller may see (own team; everyone for Admin/Owner). Sales Analysis
+  (Month / Area / Sales Officer / Category filters; Category-, Product-, Party(DP)-, Officer-, Area-wise share), the
+  RM and Marketing Manager dashboards, the ASM performance table and Team Targets all use it with
+  `/api/targets/team`, `/api/team/shops` and today's `/api/attendance/team`. The demo people, the seeded orders and the
+  ₹5,00,000 / ₹8,00,000 default targets are gone: the local officer / ASM / RM records are rebuilt from `/api/users`.
+* **ASM dashboard** shows Targets vs Sales and Team Shops right after login.
+* **Admin console**: a role card lists every active person in that role; the Admin opens one person's dashboard
+  (their own team only) and "Back to Admin" returns.
+* **RM / Marketing Manager**: the stand-alone Reports module is removed; Messages is responsive.
+* **Shops** keep mobile, full address and `productCategories` (new column `shops.product_categories`). A Sales Officer
+  adding a shop without a connection keeps it on the phone and it is sent automatically when back online.
+  Shop lists (My Shops, Team Shops) export to PDF / Excel with all details.
+* **Daily Shop Report** is stored per officer per day: `GET /api/daily-reports?date&officerId`,
+  `PUT /api/daily-reports/{date}` (Sales Officer, own report), `GET /api/daily-reports/range`. Table `daily_reports`
+  (header and rows as JSON). Edits are saved automatically; offline edits wait on the phone and sync on reconnect.
+  Its PDF / Excel include a Shop Details section (mobile, address, categories).
+* Tests: `scripts/ui-test/live-e2e.js` (real browser, 54 checks against the mock API).

@@ -54,6 +54,28 @@ public class StockService {
                 .stream().map(StockEntryResponse::from).toList();
     }
 
+    /**
+     * Every stock entry between from and to (inclusive) of everyone the caller may see: the whole company for
+     * ADMIN/OWNER, the reporting tree for a manager, only themselves for a Sales Officer. This is the "actual sales"
+     * feed the Sales Analysis and the manager dashboards are built from (SO Sales + DP Sales x unit price).
+     */
+    @Transactional(readOnly = true)
+    public List<StockEntryResponse> team(AppUserDetails caller, LocalDate from, LocalDate to) {
+        LocalDate end = to == null ? today() : to;
+        LocalDate start = from == null ? end.withDayOfMonth(1) : from;
+        if (start.isAfter(end)) {
+            throw ApiException.badRequest("BAD_RANGE", "'from' must be on or before 'to'.");
+        }
+        if (start.plusDays(MAX_RANGE_DAYS).isBefore(end)) {
+            throw ApiException.badRequest("RANGE_TOO_LONG", "Please ask for at most " + MAX_RANGE_DAYS + " days at a time.");
+        }
+        ScopeService.Scope scope = scopeService.scopeOf(caller);
+        return repository.findAllBetween(start, end).stream()
+                .filter(e -> scope.contains(e.getOfficer().getId()))
+                .map(StockEntryResponse::from)
+                .toList();
+    }
+
     /** product -> opening stock for the given day (= the closing of the latest earlier day on record). */
     @Transactional(readOnly = true)
     public Map<String, Integer> openings(AppUserDetails caller, Long officerId, LocalDate date) {

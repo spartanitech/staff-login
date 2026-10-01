@@ -7,7 +7,8 @@ import com.spartan.attendance.entity.User;
 public record ShopResponse(Long id, String code, String name, String locality, String region, String address, String phone,
                            double latitude, double longitude, int allowedRadiusMeters, Status status,
                            Long assignedOfficerId, String assignedOfficerName,
-                           String city, Long createdById, String createdByName) {
+                           String city, Long createdById, String createdByName, String productCategories,
+                           java.time.LocalDateTime createdAt) {
 
     public static ShopResponse from(Shop s) {
         User o = s.getAssignedOfficer();
@@ -15,6 +16,7 @@ public record ShopResponse(Long id, String code, String name, String locality, S
         return new ShopResponse(s.getId(), s.getCode(), s.getName(), s.getLocality(), s.getRegion(), s.getAddress(), s.getPhone(),
                 s.getLatitude(), s.getLongitude(), s.getAllowedRadiusMeters(), s.getStatus(),
                 o == null ? null : o.getId(), o == null ? null : o.getName(),
-                s.getCity(), c == null ? null : c.getId(), c == null ? null : c.getName());
+                s.getCity(), c == null ? null : c.getId(), c == null ? null : c.getName(), s.getProductCategories(),
+                s.getCreatedAt());
     }
 }

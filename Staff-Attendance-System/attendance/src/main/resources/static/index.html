@@ -7717,7 +7717,7 @@
                     // not the old `o.sales` field, which only a manual "Sales Report" entry
                     // ever set and otherwise sat at 0 forever, showing ₹0 / 0% even after
                     // real orders were booked and the Team Targets card already updated.
-                    const target = Number(o.monthlyTarget) || 500000;
+                    const target = Number(o.monthlyTarget) || 0;
                     const sales = officerRealSales(o);
                     asmData.soPerf.push({
                         name: o.name,
@@ -12428,7 +12428,7 @@
             const done = visits.filter(v => v.status === 'Completed');
             const achieved = done.filter(v => v.order)
                 .reduce((t, v) => t + (Number(v.order.total) || 0), 0);
-            const target = mine.reduce((t, o) => t + (Number(o.monthlyTarget) || 500000), 0);
+            const target = mine.reduce((t, o) => t + (Number(o.monthlyTarget) || 0), 0);
             const pct = target ? Math.round((achieved / target) * 100) : 0;
 
             return {
@@ -12455,7 +12455,7 @@
         try { asms = rmRosterASMs(); officers = rmRosterOfficers(); } catch (e) {}
 
         const pctOf = (list) => {
-            const target = list.reduce((t, o) => t + (Number(o.monthlyTarget) || 500000), 0);
+            const target = list.reduce((t, o) => t + (Number(o.monthlyTarget) || 0), 0);
             let achieved = 0;
             try {
                 achieved = list.flatMap(o => o.plannedVisitsList || [])
@@ -14293,7 +14293,7 @@
         try { visits = officers.flatMap(o => officerVisitRows(o)); } catch (e) {}
         const sales = visits.filter(v => v.order)
             .reduce((t, v) => t + (Number(v.order.total) || 0), 0);
-        const target = officers.reduce((t, o) => t + (Number(o.monthlyTarget) || 500000), 0);
+        const target = officers.reduce((t, o) => t + (Number(o.monthlyTarget) || 0), 0);
         const targetPct = target ? Math.round((sales / target) * 100) : 0;
 
         rmData.kpis = [
@@ -22094,6 +22094,7 @@
         .dsr-table tfoot tr { background:#F0F5FB; border-color:#D3E2F5; }
         .dsr-table tfoot td::before { color:#5A6B80; }
     }
+    .dsr-cats { font-size:10.5px; font-weight:600; color:#2E4A9E; margin-top:2px; }
 </style>
 <script>
     (function () {
@@ -22135,7 +22136,17 @@
         }
         function saveStore(key, obj) {
             try { localStorage.setItem(key, JSON.stringify(obj)); } catch (e) {}
+            // portal-live.js sends the report to the server (or queues it while offline)
+            if (window.SPDailyReportSync) { try { window.SPDailyReportSync.changed(scopeKey()); } catch (e) {} }
         }
+        // the server sync needs to know where this form keeps today's report
+        window.__dsrStore = {
+            HEAD_KEY: HEAD_KEY, ROW_KEY: ROW_KEY,
+            scopeKey: function () { return scopeKey(); },
+            officerName: function () { return officerName(); },
+            read: function (key) { return loadStore(key); },
+            write: function (key, obj) { try { localStorage.setItem(key, JSON.stringify(obj)); } catch (e) {} }
+        };
 
         function headerData() {
             const all = loadStore(HEAD_KEY);
@@ -22172,6 +22183,16 @@
             if (/departmental|department/.test(n)) return 'DS';
             if (/store|stores|maligai|maligan|provision|mart|agenc|trader/.test(n)) return 'GS';
             return 'OTHERS';
+        }
+
+        // Product categories also live on the shop master (set by whoever added the shop).
+        function categoriesFor(shop) {
+            const sv = asmShopByName(shop);
+            return sv && sv.categories ? String(sv.categories) : '';
+        }
+        function addressFor(shop) {
+            const sv = asmShopByName(shop);
+            return sv && sv.address ? String(sv.address) : '';
         }
 
         // Mobile numbers live on the shop master, not on the visit.
@@ -22230,6 +22251,8 @@
                     type: saved.type || guessType(v.shop),
                     location: saved.location || v.location || '',
                     mobile: saved.mobile || mobileFor(v.shop),
+                    categories: categoriesFor(v.shop),
+                    address: addressFor(v.shop),
                     nuts:    pick(saved.nuts, q.nuts),
                     seeds:   pick(saved.seeds, q.seeds),
                     makkana: pick(saved.makkana, q.makkana),
@@ -22680,7 +22703,8 @@
                     const sq = esc(r.shop).replace(/'/g, "\\'");
                     return '<tr data-shop="' + esc(r.shop) + '"' + (r.visited ? '' : ' class="unvisited"') + '>' +
                         '<td data-label="S No" class="dsr-sno">' + (i + 1) + '</td>' +
-                        '<td data-label="Shop" class="dsr-shop">' + esc(r.shop) + '</td>' +
+                        '<td data-label="Shop" class="dsr-shop">' + esc(r.shop) +
+                        (r.categories ? '<div class="dsr-cats">' + esc(r.categories) + '</div>' : '') + '</td>' +
                         '<td data-label="Type"><select class="dsr-cell-in" onchange="dsrRowInput(\'' + sq + '\', \'type\', this.value)">' +
                         TYPES.map(function (t) { return '<option' + (t === r.type ? ' selected' : '') + '>' + t + '</option>'; }).join('') +
                         '</select></td>' +
@@ -22826,7 +22850,26 @@
                     y += 5;
                 });
 
+                // Shop details from the shop master: mobile, full address and product categories.
+                y += 8;
+                if (y > 170) { doc.addPage(); y = 20; }
+                doc.setFontSize(9); doc.setTextColor(20, 30, 60); doc.text('SHOP DETAILS', 12, y); y += 5;
+                doc.setFontSize(8);
+                const sx = [12, 22, 90, 120, 210], sw = [9, 66, 28, 88, 75];
+                ['S', 'Shop Name', 'Mobile', 'Address', 'Product Categories'].forEach(function (t, i) { doc.text(t, sx[i], y); });
+                y += 2; doc.line(12, y, 285, y); y += 4;
+                doc.setTextColor(60, 60, 60);
+                list.forEach(function (r, i) {
+                    const cells = [String(i + 1), String(r.shop), String(r.mobile || '-'), String(r.address || '-'), String(r.categories || '-')]
+                        .map(function (t, ci) { return doc.splitTextToSize(t, sw[ci]); });
+                    const hgt = Math.max.apply(null, cells.map(function (c) { return c.length; })) * 3.6;
+                    if (y + hgt > 195) { doc.addPage(); y = 20; }
+                    cells.forEach(function (c, ci) { doc.text(c, sx[ci], y); });
+                    y += hgt + 1.2;
+                });
+
                 y += 12;
+                if (y > 195) { doc.addPage(); y = 20; }
                 doc.setTextColor(110, 110, 110);
                 doc.text('MARKETING REP SIGNATURE', 228, y);
                 doc.save('Daily-Shop-Report-' + name.replace(/\s+/g, '-') + '-' + fileDate + '.pdf');
@@ -22983,6 +23026,21 @@
                 opHeadRow.eachCell(function (cell) { cell.font = { bold: true, color: { argb: GOLD_TEXT } }; });
                 [['TOTAL CALL COUNT', c.calls], ['PC CALL COUNT', c.pc], ['NEW OUTLET', c.outlets]].forEach(function (pair) {
                     ws.addRow(pair);
+                });
+
+                // Second sheet: shop details from the shop master (mobile, full address, product categories).
+                const sd = wb.addWorksheet('Shop Details');
+                sd.columns = [{ width: 6 }, { width: 32 }, { width: 14 }, { width: 48 }, { width: 40 }];
+                const sdHead = sd.addRow(['S NO', 'SHOP NAME', 'MOBILE', 'ADDRESS', 'PRODUCT CATEGORIES']);
+                sdHead.eachCell(function (cell) {
+                    cell.font = { bold: true, color: { argb: NAVY } };
+                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEAD_FILL } };
+                    cell.border = ALL_BORDERS;
+                });
+                list.forEach(function (r, i) {
+                    const row = sd.addRow([i + 1, r.shop, r.mobile || '', r.address || '', r.categories || '']);
+                    row.alignment = { vertical: 'top', wrapText: true };
+                    row.eachCell(function (cell) { cell.border = ALL_BORDERS; });
                 });
 
                 try {
@@ -23870,6 +23928,7 @@
 <script src="admin-console.js"></script>
 <script src="so-sales.js"></script>
 <script src="so-reports.js"></script>
+<script src="portal-live.js"></script>
 
 </body>
 </html>

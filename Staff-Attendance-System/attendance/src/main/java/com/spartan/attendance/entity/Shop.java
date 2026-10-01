@@ -50,6 +50,10 @@ public class Shop {
     @Column(length = 20)
     private String phone;
 
+    /** What the shop buys from us, comma separated (e.g. "Dry Fruits, Seeds"). Set by whoever adds the shop. */
+    @Column(name = "product_categories", length = 255)
+    private String productCategories;
+
     @Column(nullable = false)
     private double latitude;
 

@@ -298,6 +298,13 @@
 
         // daily stock: closing = opening + receipt - SO sales - DP sales; next day's opening = previous closing
         stock: function (q) { return request('GET', '/api/stock', { query: q }); },
+        // everyone I may see (my team / the whole company) - the sales feed for analysis and dashboards
+        teamStock: function (from, to) { return request('GET', '/api/stock/team', { query: { from: from || '', to: to || '' } }); },
+        // Daily Shop Report (one per officer per day)
+        dailyReport: function (date, officerId) {
+            return request('GET', '/api/daily-reports', { query: { date: date || '', officerId: officerId || '' } });
+        },
+        saveDailyReport: function (date, body) { return request('PUT', '/api/daily-reports/' + encodeURIComponent(date), { body: body }); },
         stockOpenings: function (date, officerId) {
             return request('GET', '/api/stock/openings', { query: { date: date, officerId: officerId || '' } });
         },

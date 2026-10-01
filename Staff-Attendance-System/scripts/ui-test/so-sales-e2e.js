@@ -92,7 +92,7 @@ require('fs').mkdirSync(SHOTS, { recursive: true });
   await so.evaluate(() => openSOWeeklyReport()); await so.waitForSelector('#wsr2-date', { timeout: 5000 });
   check('Dry Fruits first, 8 products', (await so.$eval('.wsr2-table', t => t.tBodies[0].rows.length)) === 8 && /DRY FRUITS/.test(await so.$eval('.wsr2-cat.on', e => e.textContent)));
   const heads = await so.$eval('.wsr2-table', t => [...t.tHead.rows[0].cells].map(x => x.textContent));
-  check('columns No/Product/Opening/Receipt/Closing/SO Sales/DP Sales', heads.join('|') === 'No.|Product|Opening|Receipt|Closing|SO Sales|DP Sales', heads);
+  check('columns No/Product/Opening/Receipt/Total Stock/SO Sales/DP Sales/Total Sales/Closing', heads.join('|') === 'No.|Product|Opening|Receipt|Total Stock|SO Sales|DP Sales|Total Sales|Closing', heads);
   await so.evaluate(v => SOReports.wsrDate(v), yIso); await so.waitForSelector('.wsr2-table input'); await sleep(300);
   const P = 'Almond California (100GM)';
   const setv = async (f, v) => { await so.$eval(`.wsr2-table input[data-p="${P}"][data-f="${f}"]`, (e, v) => { e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); }, String(v)); };

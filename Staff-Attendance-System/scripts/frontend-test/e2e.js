@@ -455,9 +455,18 @@ const visible2 = (d, id) => d.getElementById(id).classList.contains('open');
     check('settings show the server policy', /09:30/.test(text(p.d, '#sp-admin-settings')) && /SUNDAY/.test(text(p.d, '#sp-admin-settings')));
 
     console.log('\n[11b] Admin previewing role dashboards');
+    const PICK_ROLE = { goToOwnerAsSupervisor: 'OWNER', goToRSMAsSupervisor: 'RSM', goToRMAsSupervisor: 'RM', goToASMAsSupervisor: 'ASM', goToSOAsSupervisor: 'SO' };
     for (const fn of ['goToOwnerAsSupervisor', 'goToRSMAsSupervisor', 'goToRMAsSupervisor', 'goToASMAsSupervisor', 'goToSOAsSupervisor']) {
         let err = null; try { p.w[fn](); } catch (e) { err = e; }
-        check(`${fn}() opens without errors and still signed in as Admin`, !err && p.w.SPApi.user().role === 'ADMIN', err && String(err));
+        // the role card now lists the active people in that role instead of opening a default profile
+        await waitFor(() => p.d.querySelectorAll('#lv-pick-list .lv-person').length > 0, fn + ' people list');
+        const people = [...p.d.querySelectorAll('#lv-pick-list .lv-person b')].map(b => b.textContent);
+        const expected = S.users.filter(u => u.role === PICK_ROLE[fn] && u.status === 'ACTIVE').map(u => u.name).sort();
+        check(`${fn}: lists every active ${PICK_ROLE[fn]} (${expected.join(', ')}) and opens nobody by default`,
+            JSON.stringify(people.slice().sort()) === JSON.stringify(expected) && visible(p.d, 'supervisor-dashboard-view'), people);
+        try { p.d.querySelector('#lv-pick-list .lv-person').click(); } catch (e) { err = e; }
+        await sleep(30);
+        check(`${fn}() opens the picked person without errors and still signed in as Admin`, !err && p.w.SPApi.user().role === 'ADMIN' && !visible(p.d, 'supervisor-dashboard-view'), err && String(err));
         const back = p.d.querySelector('.view.active [id$="logout-btn"]');
         if (back) back.click();
         await sleep(20);
