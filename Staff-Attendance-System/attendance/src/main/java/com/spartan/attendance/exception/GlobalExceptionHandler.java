@@ -7,6 +7,8 @@ import jakarta.validation.ConstraintViolationException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.NestedExceptionUtils;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -30,6 +32,14 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    /**
+     * When true, 409/500 responses also carry the database / exception message in details.cause so the Admin sees the
+     * real reason on screen. Keep false on the public site once the problem is found (it can reveal table names).
+     * Every 500 always carries details.errorId, which is also in the server log next to the full stack trace.
+     */
+    @Value("${app.errors.expose-details:false}")
+    private boolean exposeDetails;
 
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ApiError> handleApi(ApiException ex, HttpServletRequest req) {
@@ -82,8 +92,14 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ApiError> handleIntegrity(DataIntegrityViolationException ex, HttpServletRequest req) {
-        log.warn("Data integrity violation on {}: {}", req.getRequestURI(), ex.getMostSpecificCause().getMessage());
-        return build(HttpStatus.CONFLICT, "CONFLICT", "That change conflicts with existing data (duplicate or in use).", req, null);
+        String cause = ex.getMostSpecificCause().getMessage();
+        log.warn("Data integrity violation on {} {}: {}", req.getMethod(), req.getRequestURI(), cause);
+        Map<String, Object> details = null;
+        if (exposeDetails) {
+            details = new LinkedHashMap<>();
+            details.put("cause", cause);
+        }
+        return build(HttpStatus.CONFLICT, "CONFLICT", "That change conflicts with existing data (duplicate or in use).", req, details);
     }
 
     /** A URL that matches nothing (for example the browser asking for /favicon.ico) is a 404, not a server fault. */
@@ -109,8 +125,16 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleOther(Exception ex, HttpServletRequest req) {
-        log.error("Unhandled error on {} {}", req.getMethod(), req.getRequestURI(), ex);
-        return build(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Something went wrong on the server. Please try again.", req, null);
+        String errorId = java.util.UUID.randomUUID().toString().substring(0, 8);
+        Throwable root = NestedExceptionUtils.getMostSpecificCause(ex);
+        log.error("Unhandled error [{}] on {} {} - root cause {}: {}", errorId, req.getMethod(), req.getRequestURI(),
+                root.getClass().getName(), root.getMessage(), ex);
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("errorId", errorId);
+        if (exposeDetails) {
+            details.put("cause", root.getClass().getSimpleName() + ": " + root.getMessage());
+        }
+        return build(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Something went wrong on the server. Please try again.", req, details);
     }
 
     private ResponseEntity<ApiError> build(HttpStatus status, String code, String message,
