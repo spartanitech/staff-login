@@ -18,8 +18,14 @@ require('fs').mkdirSync(SHOTS, { recursive: true });
   const id = n => S.users.find(u => u.name === n).id;
 
   // ---- seed: stock reports (= sales) and targets for this month
-  const add = (who, date, product, category, so, dp, price, dpName) => S.stock.push({ id: ++S.seq.stock, officerId: id(who), date, product, category,
-    opening: 100, receipt: 0, totalStock: 100, soSales: so, dpSales: dp, totalSales: so + dp, closing: 100 - so - dp, unitPrice: price, dpName });
+  // Sales = booked orders + DP Sales (SOSales.salesEntries). The SO-sales quantity of each seed row is also booked as an
+  // order of that officer on that day, so the expected totals below are unchanged.
+  const add = (who, date, product, category, so, dp, price, dpName) => {
+    S.stock.push({ id: ++S.seq.stock, officerId: id(who), date, product, category,
+      opening: 100, receipt: 0, totalStock: 100, soSales: so, dpSales: dp, totalSales: so + dp, closing: 100 - so - dp, unitPrice: price, dpName });
+    if (so) S.orders.push({ id: ++S.seq.order, officerId: id(who), clientRef: date + '|' + product, shopName: (dpName || 'Shop') + ' outlet', date,
+      items: [{ name: product, category, price, qty: so }], itemCount: 1, total: so * price, status: 'CONFIRMED' });
+  };
   add('Ravi', today, 'Almond California (100GM)', 'DRY FRUITS', 10, 5, 200, 'Lalitha Agencies');   // 3,000
   add('Ravi', today, 'Chia Seeds (100GM)', 'SEEDS', 4, 0, 100, 'Lalitha Agencies');                 //   400
   add('Murugan', today, 'Walnut (100GM)', 'DRY FRUITS', 2, 3, 300, 'Theni Traders');               // 1,500

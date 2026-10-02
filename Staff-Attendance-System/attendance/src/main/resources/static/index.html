@@ -4,11 +4,58 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sales Hierarchy Portal &amp; Owner Dashboard</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <script>
+    /* PDF / Excel / map libraries (~1.5 MB) used to block the first screen. They are now fetched in the background after
+       the page is shown (or at the first tap), and an export / map button tapped before they arrive waits for them. */
+    (function () {
+        var LIBS = [
+            ['jspdf', 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'],
+            ['XLSX', 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'],
+            ['ExcelJS', 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js'],
+            ['L', 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js']
+        ];
+        var started = null;
+        function css(href) { var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = href; document.head.appendChild(l); }
+        function one(src) {
+            return new Promise(function (ok) {
+                var s = document.createElement('script'); s.src = src; s.async = true;
+                s.onload = s.onerror = function () { ok(); };
+                document.head.appendChild(s);
+            });
+        }
+        function load() {
+            if (started) return started;
+            css('https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css');
+            started = Promise.all(LIBS.map(function (l) { return window[l[0]] ? null : one(l[1]); }));
+            return started;
+        }
+        function ready() { return LIBS.every(function (l) { return !!window[l[0]]; }); }
+        window.SPLibs = { load: load, ready: ready };
+        window.addEventListener('load', function () { setTimeout(load, 1200); });
+        ['pointerdown', 'keydown', 'touchstart'].forEach(function (ev) { window.addEventListener(ev, function () { load(); }, { once: true, passive: true, capture: true }); });
+        // an export / map button pressed before the libraries arrived: wait for them, then press it again
+        function needs(t) {
+            var n = [];
+            if (/pdf|📄/i.test(t)) n.push('jspdf');
+            if (/excel|xlsx|📊/i.test(t)) n.push('XLSX', 'ExcelJS');
+            if (/export|download/i.test(t)) n.push('jspdf', 'XLSX', 'ExcelJS');
+            if (/\bmap\b|leaflet/i.test(t)) n.push('L');
+            return n;
+        }
+        document.addEventListener('click', function (e) {
+            if (e.__spReplay || ready()) return;
+            var b = e.target && e.target.closest ? e.target.closest('button, a, [onclick]') : null;
+            if (!b) return;
+            var want = needs((b.textContent || '') + ' ' + (b.getAttribute('onclick') || '') + ' ' + (b.getAttribute('data-act') || '') + ' ' + (b.id || ''));
+            if (!want.length || want.every(function (k) { return !!window[k]; })) return;
+            e.preventDefault(); e.stopImmediatePropagation();
+            var t = b;
+            load().then(function () { var ev = new MouseEvent('click', { bubbles: true, cancelable: true }); ev.__spReplay = true; t.dispatchEvent(ev); });
+        }, true);
+    })();
+    </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600&family=League+Spartan:wght@600;700;800&display=swap');
 
@@ -5768,7 +5815,23 @@
         return t + '…';
     }
 
+    // Which camera each preview uses (attendance: front first); the 🔄 button flips between front ('user') and back ('environment').
+    const liveCameraFacing = {};
+    window.switchLiveCamera = function (previewId) {
+        const args = liveCameraArgs[previewId];
+        if (!args) return;
+        const cur = liveCameraFacing[previewId] || ((previewId === 'so-att-photo-preview' || previewId === 'sv-photo-preview') ? 'user' : 'environment');
+        liveCameraFacing[previewId] = cur === 'user' ? 'environment' : 'user';
+        stopLiveCamera(previewId);
+        startLiveCamera.apply(null, args);
+    };
+    const liveCameraArgs = {};
+
     function startLiveCamera(previewId, btnId, fallbackBtnId, onCaptured, getStamp) {
+        liveCameraArgs[previewId] = [previewId, btnId, fallbackBtnId, onCaptured, getStamp];
+        // attendance photos open the front (selfie) camera first; 🔄 switches to the back camera for the shop board
+        const facing = liveCameraFacing[previewId] || ((previewId === 'so-att-photo-preview' || previewId === 'sv-photo-preview') ? 'user' : 'environment');
+        liveCameraFacing[previewId] = facing;
         const preview = document.getElementById(previewId);
         const btn = document.getElementById(btnId);
         const fallbackBtn = document.getElementById(fallbackBtnId);
@@ -5782,10 +5845,11 @@
             return;
         }
 
-        navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } }, audio: false })
             .then(stream => {
                 liveCameraStreams[previewId] = stream;
-                preview.innerHTML = `<video id="${previewId}-video" autoplay playsinline muted style="width:100%; height:100%; object-fit:cover;"></video><span style="position:absolute; top:6px; right:6px; background:#F0958D; color:#fff; font-size:9px; padding:2px 8px; border-radius:8px;">LIVE</span><span style="position:absolute; bottom:6px; left:6px; background:rgba(4,52,76,0.65); color:#9FE3C4; font-size:8.5px; font-weight:700; padding:2px 7px; border-radius:6px;">📍 GPS CAMERA</span>`;
+                preview.innerHTML = `<video id="${previewId}-video" autoplay playsinline muted style="width:100%; height:100%; object-fit:cover;${facing === 'user' ? ' transform:scaleX(-1);' : ''}"></video><span style="position:absolute; top:6px; right:6px; background:#F0958D; color:#fff; font-size:9px; padding:2px 8px; border-radius:8px;">LIVE</span><span style="position:absolute; bottom:6px; left:6px; background:rgba(4,52,76,0.65); color:#9FE3C4; font-size:8.5px; font-weight:700; padding:2px 7px; border-radius:6px;">📍 GPS CAMERA</span>` +
+                    `<button type="button" class="cam-switch" onclick="event.stopPropagation(); switchLiveCamera('${previewId}')" title="Switch front / back camera" aria-label="Switch front or back camera" style="position:absolute; top:6px; left:6px; background:rgba(4,52,76,0.75); color:#fff; border:0; border-radius:16px; padding:5px 9px; font-size:11px; font-weight:700; cursor:pointer;">🔄 ${facing === 'user' ? 'Back camera' : 'Front camera'}</button>`;
                 const videoEl = document.getElementById(`${previewId}-video`);
                 videoEl.srcObject = stream;
                 if (btn) {
@@ -5806,7 +5870,9 @@
         canvas.width = videoEl.videoWidth || 320;
         canvas.height = videoEl.videoHeight || 240;
         const ctx = canvas.getContext('2d');
+        if (liveCameraFacing[previewId] === 'user') { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }   // front camera: save it the way it was seen
         ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
         drawGPSStampOnCanvas(ctx, canvas.width, canvas.height, getStamp ? getStamp() : null);
         const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
         stopLiveCamera(previewId);
@@ -5903,6 +5969,36 @@
         // so the self-contained SVG map drawn above is the map.)
     }
 
+    // A phone's first GPS answer is often a rough network fix (hundreds of metres off), which showed a wrong
+    // distance at check-in. Listen for a few seconds and keep the most accurate reading: done as soon as it is
+    // within 20 m, or after 12 s with the best one seen. onProgress(acc) lets the screen show it improving.
+    function getBestGpsFix(onFix, onError, onProgress) {
+        if (!navigator.geolocation) { onError({ code: 0 }); return; }
+        if (typeof navigator.geolocation.watchPosition !== 'function') {   // older browsers: one reading
+            navigator.geolocation.getCurrentPosition(onFix, onError, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+            return;
+        }
+        let best = null, done = false, watchId = null, timer = null;
+        const finish = (fn, arg) => {
+            if (done) return; done = true;
+            if (watchId != null) { try { navigator.geolocation.clearWatch(watchId); } catch (e) {} }
+            clearTimeout(timer);
+            fn(arg);
+        };
+        const take = (pos) => {
+            const c = pos.coords;
+            if (!best || (c.accuracy != null && c.accuracy < best.coords.accuracy)) best = pos;
+            if (onProgress) { try { onProgress(best.coords.accuracy); } catch (e) {} }
+            if (best.coords.accuracy != null && best.coords.accuracy <= 20) finish(onFix, best);
+        };
+        try {
+            watchId = navigator.geolocation.watchPosition(take, (err) => { if (!best) finish(onError, err); },
+                { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+        } catch (e) { finish(onError, { code: 0 }); return; }
+        timer = setTimeout(() => { if (best) finish(onFix, best); else finish(onError, { code: 3 }); }, 12000);
+    }
+    window.getBestGpsFix = getBestGpsFix;
+
     function haversineMeters(lat1, lng1, lat2, lng2) {
         const R = 6371000;
         const toRad = d => d * Math.PI / 180;
@@ -5930,6 +6026,7 @@
         const serverShops = (window.SPBridge && SPBridge.serverShops) ? SPBridge.serverShops() : null;
         const myShops = serverShops || getMyShopsForOfficer(info);
         const picked = (preselectShopId && myShops.find(s => s.id === preselectShopId)) || myShops[0];
+        const userPicked = !!(preselectShopId && myShops.find(s => s.id === preselectShopId));
         const shop = (picked && picked._server) ? picked : applyShopLocationOverride(picked);
         if (!shop) return; // nothing assigned yet — nothing to mark attendance against
 
@@ -5941,7 +6038,8 @@
             photo: null, orderStatus: 'Pending',
             loginTime: now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
             date: now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
-            isFirstVisit: !(currentOfficer.visitedShopIds || []).includes(shop.id)
+            isFirstVisit: !(currentOfficer.visitedShopIds || []).includes(shop.id),
+            shops: myShops, userPicked: userPicked
         };
 
         document.getElementById('so-attendance-overlay').classList.add('open');
@@ -6152,6 +6250,24 @@
     // a preview: the server repeats the distance/accuracy check and is the one that decides.
     function applySOAttLocation(deviceLat, deviceLng, deviceAcc) {
         const s = soAttendanceState;
+        // The popup opened on the first shop in the list, which is often not where the officer is standing - that read
+        // as a wrong (far) distance. Unless they picked a shop themselves, switch to the nearest of their own shops.
+        if (!s.userPicked && Array.isArray(s.shops) && s.shops.length > 1) {
+            let near = null, nearD = Infinity;
+            s.shops.forEach(function (sh) {
+                if (!sh || sh.lat == null || sh.lng == null) return;
+                const d = haversineMeters(deviceLat, deviceLng, Number(sh.lat), Number(sh.lng));
+                if (d < nearD) { nearD = d; near = sh; }
+            });
+            if (near && near !== s.shop && near.id !== (s.shop && s.shop.id)) {
+                s.shop = near._server ? near : applyShopLocationOverride(near);
+                s.isFirstVisit = !(currentOfficer.visitedShopIds || []).includes(s.shop.id);
+                renderSOAttShopSelect(s.shops, s.shop.id);
+                renderSOAttShopDetails();
+                const lbl = document.getElementById('so-att-visit-label');
+                if (lbl) lbl.textContent = s.isFirstVisit ? '(First Visit)' : '(Revisit)';
+            }
+        }
         const range = attRangeFor(s.shop);
         const server = !!(s.shop && s.shop._server);
         const maxAcc = (server && window.SPBridge && SPBridge.maxAccuracy) ? SPBridge.maxAccuracy() : null;
@@ -6159,7 +6275,7 @@
         s.deviceLat = deviceLat;
         s.deviceLng = deviceLng;
         s.deviceAcc = (deviceAcc == null || isNaN(deviceAcc)) ? null : deviceAcc;
-        s.distance = haversineMeters(s.deviceLat, s.deviceLng, s.shop.lat, s.shop.lng);
+        s.distance = haversineMeters(s.deviceLat, s.deviceLng, Number(s.shop.lat), Number(s.shop.lng));
         s.withinRange = s.distance <= range;
         s.accuracyOk = !(server && maxAcc != null && (s.deviceAcc == null || s.deviceAcc > maxAcc));
 
@@ -6241,10 +6357,13 @@
             showSOGPSError('Location not supported on this device');
             return;
         }
-        navigator.geolocation.getCurrentPosition(
+        getBestGpsFix(
             (pos) => applySOAttLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy),
             (err) => showSOGPSError(err.code === 1 ? 'Location permission denied' : 'Could not fetch location'),
-            { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+            (acc) => {
+                const b = document.getElementById('so-att-gps-body');
+                if (b && soAttendanceState.deviceLat === null) b.innerHTML = `<div style="color:var(--ink-dim);">📡 Getting an accurate fix… ±${Math.round(acc)} m</div>`;
+            }
         );
     }
 
@@ -6376,7 +6495,7 @@
         if (!shop || !visit) return;
         const info = getOfficerAreaInfo(currentOfficer.name);
         const alreadyCompletedToday = (currentOfficer.plannedVisitsList || []).filter(v => v.status === 'Completed').length;
-        const photoRequired = alreadyCompletedToday === 0; // only the first shop of the day needs a live photo
+        const photoRequired = true; // every shop visit is proven with a live photo (front or back camera) and saved on the server
         svState = { shop, visit, deviceLat: null, deviceLng: null, distance: null, withinRange: false, gpsAttempted: false, photo: null, presentMarked: false, orderStatus: visit.orderStatus || 'Pending', photoRequired };
 
         // Always release any previous shop's camera stream before requesting a new one.
@@ -6649,18 +6768,20 @@
         saveSOOfficers();
     }
 
-    function applySVGPSLocation(deviceLat, deviceLng) {
+    function applySVGPSLocation(deviceLat, deviceLng, deviceAcc) {
         const s = svState;
         const distLine = document.getElementById('sv-distance-line');
+        const range = attRangeFor(s.shop);   // the shop's own radius (set by the Admin/ASM), not a fixed 20 m
         s.gpsAttempted = true;
         s.deviceLat = deviceLat;
         s.deviceLng = deviceLng;
-        s.distance = haversineMeters(s.deviceLat, s.deviceLng, s.shop.lat, s.shop.lng);
-        s.withinRange = s.distance <= ATT_RANGE_METERS;
+        s.deviceAcc = (deviceAcc == null || isNaN(deviceAcc)) ? null : deviceAcc;
+        s.distance = haversineMeters(s.deviceLat, s.deviceLng, Number(s.shop.lat), Number(s.shop.lng));
+        s.withinRange = s.distance <= range;
 
         if (distLine) {
             distLine.innerHTML = s.withinRange
-                ? `<b>Distance:</b> <span style="color:var(--green); font-weight:700;">${s.distance.toFixed(1)} m</span> <span class="badge badge-done" style="margin-left:4px;">✅ Allowed</span>`
+                ? `<b>Distance:</b> <span style="color:var(--green); font-weight:700;">${s.distance.toFixed(1)} m</span> <span class="badge badge-done" style="margin-left:4px;">✅ Allowed</span>${s.deviceAcc != null ? ` <span style="font-size:11px; color:var(--ink-dim);">GPS ±${Math.round(s.deviceAcc)} m</span>` : ''}`
                 : `<b>Distance:</b> <span style="color:#F0958D; font-weight:700;">${s.distance.toFixed(1)} m</span><br>
                    <span style="color:#C0392B; font-weight:700; font-size:12.5px;">❌ ABSENT — Too far from shop</span><br>
                    <div style="display:flex; gap:6px; margin-top:5px; flex-wrap:wrap;">
@@ -6669,7 +6790,7 @@
         }
 
         renderMapView('sv-map-visual', s.deviceLat, s.deviceLng, s.shop.lat, s.shop.lng, s.withinRange);
-        document.getElementById('sv-map-legend').textContent = `${s.shop.name} — ${ATT_RANGE_METERS}m range`;
+        document.getElementById('sv-map-legend').textContent = `${s.shop.name} — ${range}m range`;
 
         renderSVTrack();
         updateSVPresentButton();
@@ -6701,10 +6822,10 @@
             showSVGPSError('Location not supported on this device');
             return;
         }
-        navigator.geolocation.getCurrentPosition(
-            (pos) => applySVGPSLocation(pos.coords.latitude, pos.coords.longitude),
+        getBestGpsFix(
+            (pos) => applySVGPSLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy),
             (err) => showSVGPSError(err.code === 1 ? 'Location permission denied' : 'Could not fetch location'),
-            { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+            (acc) => { if (distLine && svState.deviceLat === null) distLine.innerHTML = `<span style="color:var(--ink-dim);">📡 Getting an accurate fix… ±${Math.round(acc)} m</span>`; }
         );
     }
 
@@ -6722,6 +6843,18 @@
     function svMarkPresent() {
         const s = svState;
         if (!s.withinRange || (s.photoRequired && !s.photo)) return;
+        // a server shop: the visit is saved on the server first (it repeats the distance check and keeps the photo)
+        if (s.shop && (s.shop._server || s.shop._sid) && window.SPBridge && SPBridge.submitShopVisit && !s._saved) {
+            const btn = document.getElementById('sv-present-btn');
+            if (btn) { btn.disabled = true; btn.textContent = 'Saving visit…'; }
+            if (!s.shop._sid && s.shop.id) s.shop._sid = s.shop.id;
+            SPBridge.submitShopVisit(s, () => { s._saved = true; svMarkPresent(); }, (msg) => {
+                const distLine = document.getElementById('sv-distance-line');
+                if (distLine) distLine.innerHTML += `<div style="margin-top:6px; padding:8px 10px; background:#FDEAEA; border:1px solid #F0958D; border-radius:8px; color:#A12B20; font-size:12px;">${escHtml(msg)}</div>`;
+                if (btn) { btn.disabled = false; btn.textContent = '✅ Mark Present'; }
+            });
+            return;
+        }
         const now = new Date();
         const loginTime = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
         s.presentMarked = true;
@@ -6794,7 +6927,7 @@
         document.getElementById('vs-map-legend').innerHTML = s.deviceLat !== null ? `
             <div>🔵 <b>Your Location</b><br>Lat: ${s.deviceLat.toFixed(4)}, Long: ${s.deviceLng.toFixed(4)}</div>
             <div style="margin-top:4px;">📍 <b>Shop Location</b><br>Lat: ${s.shop.lat.toFixed(4)}, Long: ${s.shop.lng.toFixed(4)}</div>
-            <div style="margin-top:4px;">Distance: ${s.distance ? s.distance.toFixed(1) + ' m' : '-'} (Within ${ATT_RANGE_METERS}m)</div>
+            <div style="margin-top:4px;">Distance: ${s.distance ? s.distance.toFixed(1) + ' m' : '-'} (Within ${attRangeFor(s.shop)}m)</div>
         ` : '';
 
         // Photo
@@ -6827,8 +6960,8 @@
         const orderVerified = v.orderStatus === 'Order Verified';
         document.getElementById('vs-checklist').innerHTML = [
             check('GPS Verified'),
-            check(`Within ${ATT_RANGE_METERS} meters`),
-            s.photoRequired ? check('Live Photo Uploaded') : `<div>ℹ️ Photo not required — attendance already marked today</div>`,
+            check(`Within ${attRangeFor(s.shop)} meters`),
+            (s.photoRequired === false && !s.photo) ? `<div>ℹ️ Photo not required — attendance already marked today</div>` : check('Live Photo Uploaded'),
             check('Attendance Marked'),
             orderVerified ? check('Order Verified') : `<div>⏳ Order Pending</div>`,
             check('Visit Completed')
@@ -15998,7 +16131,7 @@
                 </div>
                 <p style="font-size:11px; color:var(--ink-dim); margin:8px 0;">Make sure the shop board is visible in the photo</p>
                 <div id="so-att-photo-time" style="font-size:11px; color:var(--green); font-weight:600; margin:-4px 0 4px 0;"></div>
-                <input type="file" accept="image/*" capture="environment" id="so-att-photo-input" style="display:none;">
+                <input type="file" accept="image/*" capture id="so-att-photo-input" style="display:none;">
                 <button class="btn-primary" id="so-att-capture-btn" style="width:100%; padding:10px;">📷 Capture Photo</button>
                 <button class="btn-outline" id="so-att-upload-fallback-btn" style="width:100%; padding:7px; margin-top:6px; font-size:11px; display:none;" onclick="document.getElementById('so-att-photo-input').click()">📁 Camera unavailable — Upload Photo instead</button>
             </div>
@@ -16070,7 +16203,7 @@
                                 <span style="font-size:26px;">📷</span>
                             </div>
                             <div id="sv-photo-time" style="font-size:10.5px; color:var(--green); font-weight:600; margin-top:4px;"></div>
-                            <input type="file" accept="image/*" capture="environment" id="sv-photo-input" style="display:none;">
+                            <input type="file" accept="image/*" capture id="sv-photo-input" style="display:none;">
                             <button class="btn-primary" id="sv-capture-btn" style="width:100%; margin-top:8px; padding:8px; font-size:12px;">📷 Capture Photo</button>
                             <button class="btn-outline" id="sv-upload-fallback-btn" style="width:100%; padding:6px; margin-top:5px; font-size:10px; display:none;" onclick="document.getElementById('sv-photo-input').click()">📁 Camera unavailable — Upload instead</button>
                         </div>
@@ -22243,6 +22376,10 @@
             }
             return visits.map(function (v) {
                 const saved = rowData(v.shop);
+                // today's visits and orders from the server (so-orders.js), so the report is the same on every device and
+                // for the managers - not only what this browser remembers
+                const sd = window.SPServerDay ? SPServerDay.forShop(officerName(), v.shop) : null;
+                if (sd) v = Object.assign({}, v, { order: v.order || sd.order, status: (sd.visited ? 'Completed' : v.status) });
                 const q = qtyByColumn(v.order);
                 return {
                     shop: v.shop || '-',

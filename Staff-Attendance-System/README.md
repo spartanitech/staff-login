@@ -217,3 +217,37 @@ Everything below is stored in MySQL (Hibernate `ddl-auto=update` creates the new
   card per row below 680 px (column names copied from the header automatically), stacks headers/toolbars, and uses
   16 px inputs so iPhones don't zoom.
 * Tests: `cd scripts/ui-test && node orders-e2e.js` (31 checks), `node mobile-audit.js` (phone-width overflow audit).
+
+## Several shop visits a day, sync across devices, sales = orders + DP sales, camera, GPS, tablet layout
+* **Every shop visit is saved** – `POST /api/attendance/shop-visit` (GPS + live photo, table `shop_visits`). The first visit
+  of the day is also the attendance check-in (unchanged `shopCheckIn` rules); every later shop is checked the same way
+  (own / whole-team shop, GPS accuracy, inside the shop radius, live photo) and added as another visit.
+  `GET /api/attendance/visits?from&to&officerId` (scope = reporting tree), `GET /api/attendance/visits/{id}/photo`.
+  My Attendance lists "Shop visits today (n)"; the 2nd-shop popup now also needs a photo and uses the shop's own radius.
+* **Same on every device / for managers** – after sign-in the SO's plan is marked from the server (visited shops, orders),
+  and the Daily Shop Report fills its order/visit cells from the server for the officer it is open for, so it no longer
+  reads 0 on another phone or for the ASM/RM/MM/Owner/Admin. Managers' officer records use server visits and orders.
+* **Sales = booked orders + DP Sales** (stock report "SO Sales" is not added again) – one rule in `SOSales.salesEntries`,
+  used by Sales Analysis, Targets vs Sales, My Targets, team targets, dashboards and Top Performers.
+* **Camera** – live camera has a 🔄 Front / Back switch (front photos are saved un-mirrored); the fallback file input lets the
+  phone offer either camera.
+* **GPS** – readings are collected for up to 12 s and the most accurate one is used (phones' first fix is often hundreds of
+  metres off); the check-in popup switches to the nearest of the officer's shops; the 2nd-shop popup and the visit summary
+  use the shop's real radius instead of a fixed 20 m.
+* **Tablet** – wide tables become cards up to 1100 px (two per row on tablets). `node mobile-audit.js` (W=390/768/1024/1366).
+* Tests: `cd scripts/ui-test && node visits-e2e.js` (23 checks, fake camera); existing suites updated for the sales rule.
+
+## SO phone fixes: Today's Beat, Desktop-site mode, selfie camera, GPS pins, all visits in history, speed
+* **Today's Beat** counts every shop visited today from the server (visits + the check-in itself) as soon as My Attendance
+  refreshes (`SOOrders.visitsLoaded`).
+* **No sideways scrolling** – popups are one column on phones, the live camera is full width (≥240 px tall) below the other
+  sections, `html,body{overflow-x:clip}`. **Chrome "Desktop site" on a phone**: `mobile.js` re-evaluates every width media
+  query for the phone's real width, lays the page out at that width and zooms it to fill the screen (fixed bars/popups
+  re-pinned).
+* **Camera** – attendance photos open the **front (selfie)** camera first; 🔄 switches front/back.
+* **Shop locations** – only from an accurate GPS reading (`SPApi.getAccuratePosition`, best of up to 15 s, ±30 m max – a
+  laptop is refused). ASM (Team Shops) and Admin (Shops) have **📍 Fix location here** to re-pin a shop while standing at it.
+* **My history / team / admin attendance** list every shop visited that day (`attachVisits`), also in the Excel/PDF export.
+* **Speed** – jsPDF / SheetJS / ExcelJS / Leaflet no longer block the first screen (loaded in the background after the page
+  shows; an export/map tap before they arrive waits for them), and the server gzips HTML/JS/CSS
+  (`server.compression.*`; index.html ~1.4 MB → ~0.25 MB on the wire).

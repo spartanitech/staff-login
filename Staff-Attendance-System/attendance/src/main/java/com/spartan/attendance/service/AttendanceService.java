@@ -290,7 +290,7 @@ public class AttendanceService {
     }
 
     /** A plausible position (not 0,0 / NaN / out of range) with an accuracy the policy accepts. Used by every check-in and check-out. */
-    private void validateFix(GpsRequest gps) {
+    void validateFix(GpsRequest gps) {   // package-private: ShopVisitService uses it too
         double lat = gps.latitude();
         double lon = gps.longitude();
         double accuracy = gps.accuracy();

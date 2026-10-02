@@ -89,7 +89,7 @@
                     list(q),
                     API.summary({ from: q.from, to: q.to, userId: q.userId, role: q.role })
                 ]);
-                rows = res[0]; sum = res[1];
+                rows = U.attachVisits ? await U.attachVisits(res[0]) : res[0]; sum = res[1];
                 render();
             } catch (e) { out.innerHTML = errBox(e); }
         }
@@ -591,12 +591,20 @@
                         '<td><small>' + Number(x.latitude).toFixed(5) + ', ' + Number(x.longitude).toFixed(5) + '</small></td>' +
                         '<td><span class="sp-badge sp-b-' + esc(x.status) + '">' + (x.status === 'ACTIVE' ? 'Active' : 'Inactive') + '</span></td>' +
                         '<td><div class="sp-row-actions"><button type="button" class="sp-btn sp-btn-sm sp-btn-ghost" data-edit="' + x.id + '">Edit</button>' +
+                        '<button type="button" class="sp-btn sp-btn-sm sp-btn-ghost" data-pin="' + x.id + '" title="Standing at the shop? Save its location from your phone GPS">📍 Fix location here</button>' +
                         '<button type="button" class="sp-btn sp-btn-sm sp-btn-ghost" data-toggle="' + x.id + '">' + (x.status === 'ACTIVE' ? 'Deactivate' : 'Activate') + '</button>' +
                         '<button type="button" class="sp-btn sp-btn-sm sp-btn-danger" data-delete="' + x.id + '">Delete</button></div></td></tr>';
                 }).join('') + '</tbody></table></div>';
             function byId(v) { return shops.filter(function (x) { return String(x.id) === v; })[0]; }
             Array.prototype.forEach.call(t.querySelectorAll('[data-edit]'), function (b) {
                 b.addEventListener('click', function () { openShopForm(byId(b.getAttribute('data-edit')), officers, reload); });
+            });
+            Array.prototype.forEach.call(t.querySelectorAll('[data-pin]'), function (b) {
+                b.addEventListener('click', async function () {
+                    var x = byId(b.getAttribute('data-pin'));
+                    if (!global.SOSales || !global.SOSales.pinShopHere) return;
+                    if (await global.SOSales.pinShopHere(x, function (body) { return API.updateShop(x.id, body); })) reload();
+                });
             });
             Array.prototype.forEach.call(t.querySelectorAll('[data-delete]'), function (b) {
                 b.addEventListener('click', async function () {
@@ -682,7 +690,8 @@
             var btn = g('here'); btn.disabled = true; btn.textContent = 'Locating…';
             var box = $('#sp-x-err', body);
             try {
-                var p = await API.getPosition();
+                // a shop pin only from a real GPS fix: a laptop (±99 m) is refused - stand at the shop with a phone
+                var p = await API.getAccuratePosition({ goodM: 15, maxM: API.SHOP_PIN_MAX_M });
                 setPoint(p.latitude, p.longitude);
                 var acc = Math.round(p.accuracy);
                 box.innerHTML = p.accuracy > 50

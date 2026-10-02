@@ -114,7 +114,7 @@
             var y = T + i * rowH + 5, h = rowH - 10;
             var w1 = max ? pw * r.so / max : 0, w2 = max ? pw * r.dp / max : 0;
             var label = r.label.length > 26 ? r.label.slice(0, 25) + '…' : r.label;
-            out += '<g class="bar"><title>' + esc(r.label + '\nSO Sales: ' + inr(r.so) + ' (' + num(r.soQty) + ' units)\nDP Sales: ' + inr(r.dp) + ' (' + num(r.dpQty) + ' units)') + '</title>' +
+            out += '<g class="bar"><title>' + esc(r.label + '\nOrders: ' + inr(r.so) + ' (' + num(r.soQty) + ' units)\nDP Sales: ' + inr(r.dp) + ' (' + num(r.dpQty) + ' units)') + '</title>' +
                 '<rect class="hit" x="0" y="' + (y - 5) + '" width="' + W + '" height="' + rowH + '"/>' +
                 '<text x="' + (L - 8) + '" y="' + (y + h - 3) + '" text-anchor="end" font-size="11" fill="#04344C">' + esc(label) + '</text>';
             if (w1 > 0) out += '<path class="mk" d="' + barPath(L, y, Math.max(w1 - (w2 > 0 ? 2 : 0), 1.5), h, w2 > 0 ? 0 : 4, true) + '" fill="' + C.so + '"/>';
@@ -128,7 +128,7 @@
     function targetBars(target, soV, dpV) {
         var rows = [
             { label: 'ASM Target', v: target, color: C.target },
-            { label: 'Actual SO Sales', v: soV, color: C.so },
+            { label: 'Orders (SO)', v: soV, color: C.so },
             { label: 'Actual DP Sales', v: dpV, color: C.dp },
             { label: 'Total Sales', v: soV + dpV, color: C.total }
         ];
@@ -164,8 +164,10 @@
         if (officerId) q.officerId = officerId;
         var t = { month: m };
         if (officerId) t.officerId = officerId;
-        var res = await Promise.all([H.api().stock(q), H.api().target(t)]);
-        return { entries: res[0] || [], target: res[1] || { amount: 0 }, month: m, monthEnd: mEnd, today: today };
+        var res = await Promise.all([H.api().stock(q), H.api().target(t),
+            H.api().orders ? H.api().orders(q).catch(function () { return []; }) : Promise.resolve([])]);
+        // sales = booked orders + DP sales from the stock report (SOSales.salesEntries): "SO" below means the orders
+        return { entries: SO.salesEntries(res[0] || [], res[2] || []), target: res[1] || { amount: 0 }, month: m, monthEnd: mEnd, today: today };
     }
 
     function performanceHtml(d) {
@@ -208,20 +210,20 @@
             .filter(function (r) { return r.so + r.dp > 0; })
             .sort(function (a, b) { return (b.so + b.dp) - (a.so + a.dp); }).slice(0, 10);
 
-        var legend = legendHtml([{ name: 'SO Sales', color: C.so }, { name: 'DP Sales', color: C.dp }]);
+        var legend = legendHtml([{ name: 'Orders (SO)', color: C.so }, { name: 'DP Sales', color: C.dp }]);
         function kpi(label, v, sw) {
             return '<div class="sos-kpi"><div class="sos-kpi-l">' + (sw ? '<i class="sos-sw" style="background:' + sw + '"></i>' : '') + label + '</div><div class="sos-kpi-v">' + v + '</div></div>';
         }
         return '' +
             '<div class="sos-kpis">' +
             kpi('ASM Target', target ? inr(target) : 'Not set', C.target) +
-            kpi('Actual SO Sales', inr(soV), C.so) +
+            kpi('Orders (SO)', inr(soV), C.so) +
             kpi('Actual DP Sales', inr(dpV), C.dp) +
             kpi('Total Sales', inr(total), C.total) +
             kpi('Achievement', target ? pct + '%' : '—') +
             '</div>' +
             '<div class="sos-chart" style="margin-bottom:14px;"><h4>🎯 Target vs Actual — ' + esc(H.monthLabel(m)) + '</h4>' +
-            '<div class="sos-sub">' + (target ? 'Target set by ' + esc(d.target.setByName || 'your ASM') + '. Sales = quantity × product price, from the stock report.'
+            '<div class="sos-sub">' + (target ? 'Target set by ' + esc(d.target.setByName || 'your ASM') + '. Sales = your booked orders + DP Sales from the stock report (quantity × price).'
                 : 'Your ASM has not set a target for this month yet.') + '</div>' +
             targetBars(target, soV, dpV) +
             (target ? '<div class="sos-prog"><div style="width:' + Math.min(100, pct) + '%"></div></div>' +
@@ -231,12 +233,12 @@
             '<div class="sos-chart"><h4>Daily Sales</h4><div class="sos-sub">Last 7 days · ₹ value</div>' + legend +
             groupedBars(days.map(function (x) { return H.fmtDay(x); }),
                 [{ color: C.so, values: dayVals.map(function (v) { return v.so; }) }, { color: C.dp, values: dayVals.map(function (v) { return v.dp; }) }],
-                function (i) { var v = dayVals[i]; return H.fmtLong(days[i]) + '\nSO Sales: ' + inr(v.so) + ' (' + num(v.soQ) + ' units)\nDP Sales: ' + inr(v.dp) + ' (' + num(v.dpQ) + ' units)'; }) +
+                function (i) { var v = dayVals[i]; return H.fmtLong(days[i]) + '\nOrders: ' + inr(v.so) + ' (' + num(v.soQ) + ' units)\nDP Sales: ' + inr(v.dp) + ' (' + num(v.dpQ) + ' units)'; }) +
             '</div>' +
             '<div class="sos-chart"><h4>Weekly Sales</h4><div class="sos-sub">Last 6 weeks (Mon–Sun) · ₹ value</div>' + legend +
             groupedBars(weeks.map(function (x) { return H.fmtDay(x); }),
                 [{ color: C.so, values: weekVals.map(function (v) { return v.so; }) }, { color: C.dp, values: weekVals.map(function (v) { return v.dp; }) }],
-                function (i) { var v = weekVals[i]; return H.fmtDay(v.ws) + ' – ' + H.fmtDay(v.we) + '\nSO Sales: ' + inr(v.so) + ' (' + num(v.soQ) + ' units)\nDP Sales: ' + inr(v.dp) + ' (' + num(v.dpQ) + ' units)'; }) +
+                function (i) { var v = weekVals[i]; return H.fmtDay(v.ws) + ' – ' + H.fmtDay(v.we) + '\nOrders: ' + inr(v.so) + ' (' + num(v.soQ) + ' units)\nDP Sales: ' + inr(v.dp) + ' (' + num(v.dpQ) + ' units)'; }) +
             '</div>' +
             '</div>' +
             '<div class="sos-chart" style="margin-top:14px;"><h4>Product-wise Sales</h4><div class="sos-sub">' + esc(H.monthLabel(m)) + ' · top ' + prod.length + ' products by value</div>' + legend +
@@ -663,6 +665,7 @@
                     '<td data-l="Categories">' + (s.productCategories ? SO.categoryChips(s.productCategories) : '—') + '</td>' +
                     '<td><span style="display:flex;gap:6px;justify-content:flex-end;">' +
                     '<button class="sos-btn" onclick="SOReports.editShop(' + s.id + ')">✏️ Edit</button>' +
+                    '<button class="sos-btn" title="Standing at the shop? Save its location from your phone\'s GPS" onclick="SOReports.pinHere(' + s.id + ')">📍 Fix location here</button>' +
                     '<button class="sos-btn danger" onclick="SOReports.deleteShop(' + s.id + ')">🗑</button></span></td></tr>';
             }).join('') + '</tbody></table>' + (list.length ? '' : '<div class="sos-empty">No shop matches.</div>');
     }
@@ -774,9 +777,10 @@
 
     async function useMyLocation() {
         var msg = $('ts-msg');
-        if (msg) { msg.className = 'sos-msg'; msg.textContent = 'Reading your location…'; }
+        if (msg) { msg.className = 'sos-msg'; msg.textContent = 'Reading your location… stay at the shop for a few seconds'; }
         try {
-            var p = await H.api().getPosition();
+            var p = await H.api().getAccuratePosition({ goodM: 15, maxM: H.api().SHOP_PIN_MAX_M,
+                onProgress: function (a) { if (msg) msg.textContent = 'Reading your location… ±' + Math.round(a) + ' m'; } });
             var el = $('ts-loc'); if (el) el.value = p.latitude.toFixed(6) + ', ' + p.longitude.toFixed(6);
             if (msg) { msg.className = 'sos-msg ok'; msg.textContent = 'Location set (accuracy ±' + Math.round(p.accuracy) + ' m).'; }
         } catch (e) { if (msg) { msg.className = 'sos-msg bad'; msg.textContent = H.errText(e); } }
@@ -795,7 +799,9 @@
         if (first <= today) {
             await Promise.all(team.map(async function (u) {
                 try {
-                    var list = await H.api().stock({ officerId: u.id, from: first, to: to });
+                    var lists = await Promise.all([H.api().stock({ officerId: u.id, from: first, to: to }),
+                        H.api().orders ? H.api().orders({ officerId: u.id, from: first, to: to }).catch(function () { return []; }) : Promise.resolve([])]);
+                    var list = SO.salesEntries(lists[0] || [], lists[1] || []);   // orders + DP sales
                     var a = { so: 0, dp: 0 };
                     (list || []).forEach(function (e) { a.so += H.valueOf(e, 'soSales'); a.dp += H.valueOf(e, 'dpSales'); });
                     actual[u.id] = a;
@@ -811,16 +817,16 @@
             return '<tr><td data-l="Sales Officer"><b>' + esc(u.name) + '</b><div class="sos-sub">' + esc(u.area || '') + '</div></td>' +
                 '<td data-l="Target (₹)"><span style="display:flex;gap:6px;"><input type="number" min="0" step="1000" id="tt-' + u.id + '" value="' + (amt || '') + '" placeholder="0" style="width:120px;padding:7px 8px;border:1px solid #D3E2F5;border-radius:7px;font-family:inherit;">' +
                 '<button class="sos-btn pri" onclick="SOReports.saveTarget(' + u.id + ')">Save</button></span></td>' +
-                '<td data-l="SO Sales">' + inr(a.so) + '</td><td data-l="DP Sales">' + inr(a.dp) + '</td><td data-l="Total">' + inr(a.so + a.dp) + '</td>' +
+                '<td data-l="Orders">' + inr(a.so) + '</td><td data-l="DP Sales">' + inr(a.dp) + '</td><td data-l="Total">' + inr(a.so + a.dp) + '</td>' +
                 '<td data-l="Achieved" style="min-width:120px;">' + (amt ? '<div class="sos-prog" style="margin:0 0 3px;"><div style="width:' + Math.min(100, pct) + '%"></div></div>' + pct + '%' : '—') + '</td>' +
                 '<td><button class="sos-btn" onclick="SOReports.openPerformance(' + u.id + ', \'' + jsq(u.name) + ' — Sales Performance\')">📈 Graphs</button></td></tr>';
         }).join('');
         box.innerHTML = '<div class="sos-card"><div class="sos-head"><div><div class="sos-title">🎯 Monthly targets vs actual sales</div>' +
-            '<div class="sos-sub">Actual = SO Sales + DP Sales from each officer\'s stock report (quantity × price)</div></div>' +
+            '<div class="sos-sub">Actual = booked orders + DP Sales from each officer\'s stock report (quantity × price)</div></div>' +
             '<label class="wsr2-field">Month<input type="month" value="' + month + '" max="' + H.monthKey(today) + '" onchange="SOReports.teamMonth(this.value)"></label></div>' +
             (team.length ? '' : '<div class="sos-empty">No active Sales Officer reports to you yet.</div>') +
             (team.length ? '<div class="sos-chart" style="margin-bottom:12px;"><h4>Team — Target vs Actual</h4>' + targetBars(tot.t, tot.so, tot.dp) + '</div>' : '') +
-            (team.length ? '<table class="sos-tbl"><thead><tr><th>Sales Officer</th><th>Target (₹)</th><th>SO Sales</th><th>DP Sales</th><th>Total</th><th>Achieved</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '') +
+            (team.length ? '<table class="sos-tbl"><thead><tr><th>Sales Officer</th><th>Target (₹)</th><th>Orders</th><th>DP Sales</th><th>Total</th><th>Achieved</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '') +
             '</div>';
     }
 
@@ -995,6 +1001,12 @@
         teamMonth: function (m) { T.month = m; renderTeamTargets().catch(function (e) { H.toast(H.errText(e), true); }); },
         editShop: function (id) { T.editing = id; renderTeamShops(); var n = $('ts-name'); if (n) { n.focus(); n.scrollIntoView({ block: 'center' }); } },
         cancelEdit: function () { T.editing = null; renderTeamShops(); },
+        pinHere: async function (id) {
+            var s = S.teamShops.find(function (x) { return x.id === id; });
+            if (!s) return;
+            var ok = await SO.pinShopHere(s, function (body) { return H.api().updateTeamShop(id, body); });
+            if (ok) { S.teamShops = (await H.api().teamShops()) || []; renderTeamShops(); }
+        },
         officerPicked: function (id) {
             var u = (S.team || []).find(function (x) { return String(x.id) === String(id); });
             var c = $('ts-city');

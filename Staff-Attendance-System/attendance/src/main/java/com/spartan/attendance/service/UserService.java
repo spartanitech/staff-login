@@ -15,6 +15,7 @@ import com.spartan.attendance.repository.CallLogRepository;
 import com.spartan.attendance.repository.PortalMessageRepository;
 import com.spartan.attendance.repository.SalesOrderRepository;
 import com.spartan.attendance.repository.ShopRepository;
+import com.spartan.attendance.repository.ShopVisitRepository;
 import com.spartan.attendance.repository.UserRepository;
 import com.spartan.attendance.security.AppUserDetails;
 import com.spartan.attendance.util.RequestInfo;
@@ -44,6 +45,7 @@ public class UserService {
     private final PortalMessageRepository messageRepository;
     private final CallLogRepository callLogRepository;
     private final SalesOrderRepository salesOrderRepository;
+    private final ShopVisitRepository shopVisitRepository;
 
     /** ADMIN/OWNER: everyone. Managers: their reporting tree. SO: only themselves. */
     @Transactional(readOnly = true)
@@ -177,6 +179,7 @@ public class UserService {
         messageRepository.deleteBySenderId(id);
         callLogRepository.deleteByOfficerId(id);
         salesOrderRepository.deleteByOfficerId(id);
+        shopVisitRepository.deleteByOfficerId(id);
         long removedAttendance = attendanceRepository.deleteByUserId(id);
         auditService.log(admin.getId(), AuditAction.USER_DELETE,
                 "Deleted user " + user.getUsername() + " (" + user.getEmployeeCode() + ", " + user.getRole()

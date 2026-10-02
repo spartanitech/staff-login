@@ -66,7 +66,11 @@
         var ref = (day + '|' + String(shopName).trim().toLowerCase()).slice(0, 100);   // one order per shop per day
         var body = { clientRef: ref, shopId: shopIdFor(shopName), shopName: String(shopName).trim(), date: day, items: items, status: 'CONFIRMED' };
         SO.outbox.add('order', body, ref).then(function (sent) {
-            if (sent) H.toast('Order saved for ' + body.shopName + ' — your ASM can see it now');
+            if (sent) {
+                H.toast('Order saved for ' + body.shopName + ' — your ASM can see it now');
+                Day.order(body);
+                if (global.SOLive && global.SOLive.refresh) global.SOLive.refresh();   // Sales Analysis / targets use orders
+            }
             else if (SO.outbox.pending('order').length) H.toast('No connection — the order is kept on this phone and will be sent automatically', true);
         }).catch(function () { /* the outbox keeps it */ });
     }
@@ -342,15 +346,129 @@
         onSignedIn: function (user) {
             S.user = user; S.rows = []; S.officer = ''; S.q = ''; S.open = {}; S.from = null; S.to = null;
             if (isManager(user)) { mountManagerNav(); renderASMHome(); startHomeTimer(); } else { clearInterval(homeTimer); }
-            if (user && user.role === 'SO') SO.outbox.flush();
+            if (user && user.role === 'SO') { SO.outbox.flush(); setTimeout(syncSODay, 600); }
         },
-        refresh: function () { if (isManager(S.user)) renderASMHome(); }
+        refresh: function () { if (isManager(S.user)) renderASMHome(); if (S.user && S.user.role === 'SO' && Day.date) applyDayToPlan(); }
     });
 
-    global.SOOrders = { push: push, openTeam: openTeamOrders, itemsOf: itemsOf };
+    // =========================================================================================== today on the server
+    // What the officer did today - every shop visit and every order - lives on the server. The old screens keep it in
+    // this browser only (the visit plan, the Daily Shop Report's computed cells), so on another phone, after a refresh, or
+    // for a manager it read as zero. This pulls today's visits + orders and lays them over those screens.
+    var Day = {
+        officer: null, date: null, visits: {}, orders: {},
+        key: function (n) { return String(n || '').trim().toLowerCase(); },
+        reset: function (name) { Day.officer = name || null; Day.date = todayIso(); Day.visits = {}; Day.orders = {}; },
+        visit: function (v) { if (v && v.shopName) Day.visits[Day.key(v.shopName)] = v; },
+        order: function (o) {
+            if (!o || !o.shopName) return;
+            var items = (o.items || []).map(function (it) { return { name: it.name, category: it.category || '', price: Number(it.price) || 0, qty: Number(it.qty) || 0 }; });
+            Day.orders[Day.key(o.shopName)] = { items: items, itemCount: items.length, orderedOn: (o.date || todayIso()) + 'T12:00:00',
+                total: items.reduce(function (t, it) { return t + it.qty * it.price; }, 0), _server: true };
+        },
+        /** For the Daily Shop Report: { order, visited, time } of a shop for the officer whose report is open. */
+        forShop: function (officerName, shopName) {
+            if (!shopName || Day.date !== todayIso() || (Day.officer && officerName && Day.key(officerName) !== Day.key(Day.officer))) return null;
+            var k = Day.key(shopName), v = Day.visits[k], o = Day.orders[k];
+            return (v || o) ? { visited: !!v, time: v ? v.visitTime : null, order: o || null } : null;
+        }
+    };
+    global.SPServerDay = Day;
+
+    async function loadDay(officerId, officerName) {
+        var t = todayIso(), q = { from: t, to: t };
+        if (officerId) q.officerId = officerId;
+        var res = await Promise.all([
+            api().visits ? api().visits(q).catch(function () { return null; }) : Promise.resolve(null),
+            api().orders(q).catch(function () { return null; })
+        ]);
+        Day.reset(officerName);
+        (res[0] || []).forEach(Day.visit);
+        (res[1] || []).forEach(function (o) { if (o.status !== 'CANCELLED') Day.order(o); });
+        return res;
+    }
+    function fmtClock(iso) {
+        try { return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }); } catch (e) { return ''; }
+    }
+
+    /** Sales Officer, after sign-in / a visit: mark today's plan from the server (visited shops, their orders). */
+    function applyDayToPlan() {
+        var o; try { o = currentOfficer; } catch (e) { o = null; } // eslint-disable-line no-undef
+        if (!o || !S.user || S.user.role !== 'SO') return;
+        var list = o.plannedVisitsList = o.plannedVisitsList || [];
+        var changed = false;
+        Object.keys(Day.visits).forEach(function (k) {
+            var v = Day.visits[k];
+            var p = list.find(function (x) { return Day.key(x.shop) === k; });
+            if (!p) { p = { shop: v.shopName, location: '', time: 'Ad-hoc', status: 'Pending' }; list.push(p); }
+            if (p.status !== 'Completed') { p.status = 'Completed'; p.synced = true; changed = true; }
+            if (!p.loginTime) { p.loginTime = fmtClock(v.visitTime); changed = true; }
+            if (!p.gps && v.latitude != null) p.gps = Number(v.latitude).toFixed(4) + ', ' + Number(v.longitude).toFixed(4);
+        });
+        Object.keys(Day.orders).forEach(function (k) {
+            var p = list.find(function (x) { return Day.key(x.shop) === k; });
+            if (p && !p.order) { p.order = Day.orders[k]; p.orderStatus = 'Order Verified'; changed = true; }
+        });
+        var done = list.filter(function (x) { return x.status === 'Completed'; }).length;
+        if (o.visits !== done) { o.visits = done; changed = true; }
+        if (!changed) return;
+        ['saveSOOfficers', 'renderSOKPIs', 'renderSOTasks', 'renderMyAreaSummary', 'renderTodayBeatCard'].forEach(function (fn) {
+            try { if (typeof global[fn] === 'function') global[fn](); } catch (e) { /* screen not open */ }
+        });
+    }
+    async function syncSODay() {
+        if (!S.user || S.user.role !== 'SO') return;
+        try { await loadDay(null, S.user.name); } catch (e) { return; }
+        applyDayToPlan();
+    }
+    /**
+     * My Attendance just read today's state from the server (backend-bridge.js): every visit, plus the check-in itself
+     * (a check-in made before visits were recorded still counts), so Today's Beat shows the right "Visited" at once.
+     */
+    function visitsLoaded(list, attendance) {
+        if (!S.user || S.user.role !== 'SO') return;
+        if (Day.date !== todayIso() || (Day.officer && Day.key(Day.officer) !== Day.key(S.user.name))) {
+            var keepOrders = Day.date === todayIso() ? Day.orders : {};
+            Day.reset(S.user.name); Day.orders = keepOrders;
+        }
+        (list || []).forEach(Day.visit);
+        if (attendance && attendance.shopName && !Day.visits[Day.key(attendance.shopName)]) {
+            Day.visit({ shopName: attendance.shopName, visitTime: attendance.checkInTime,
+                latitude: attendance.checkInLatitude, longitude: attendance.checkInLongitude });
+        }
+        applyDayToPlan();
+    }
+    function visitSaved(v) {
+        if (!v) return;
+        Day.visit(v);
+        setTimeout(applyDayToPlan, 50);
+        if (global.SOLive && global.SOLive.refresh) global.SOLive.refresh();
+    }
+
+    // the Daily Shop Report reads today's visits and orders of the officer it is open for (the SO, or a manager viewing one)
+    function installDsrDay() {
+        var orig = global.openDailyShopReport;
+        if (typeof orig !== 'function' || orig.__day) return;
+        var w = async function () {
+            var self = this, args = arguments;
+            try {
+                if (S.user && S.user.role === 'SO') await loadDay(null, S.user.name);
+                else {
+                    var o = H.officerRec();
+                    if (o && o._uid) await loadDay(o._uid, o.name);
+                }
+            } catch (e) { /* offline: the report shows what this device has */ }
+            return orig.apply(self, args);
+        };
+        w.__day = true;
+        global.openDailyShopReport = w;
+    }
+
+    global.SOOrders = { push: push, openTeam: openTeamOrders, itemsOf: itemsOf, visitSaved: visitSaved, visitsLoaded: visitsLoaded, syncDay: syncSODay };
 
     injectCss();
     mountAdminSection();    // before the phone tab bars are built (DOMContentLoaded), so "Orders" is in the Admin's More menu
     mountManagerNav();
     mountOtherRoles();
+    installDsrDay();
 })(window);

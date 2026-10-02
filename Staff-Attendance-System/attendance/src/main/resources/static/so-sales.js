@@ -448,7 +448,7 @@
     Outbox.on('__after', function () { if (isSO()) { S.shopsLoaded = false; loadSOShops(); } });
 
     // ------------------------------------------------------------------ Sales Officer: add my shop (server + GPS)
-    var MAX_ADD_ACCURACY_M = 100;
+    var MAX_ADD_ACCURACY_M = 30;   // a shop pin only from a real GPS fix (a laptop gives ±99 m) - see SPApi.SHOP_PIN_MAX_M
 
     function openAddShopForm() {
         var m = mm();
@@ -495,14 +495,17 @@
             say('You already have a shop called "' + name + '".', true); return;
         }
         if (btn) btn.disabled = true;
-        say('Reading your GPS position…');
+        say('Reading your GPS position… stay at the shop for a few seconds');
         var pos;
-        try { pos = await currentPosition(); }
-        catch (e) { if (btn) btn.disabled = false; say(e.message, true); return; }
+        try {
+            var p = await api().getAccuratePosition({ goodM: 15, waitMs: 15000, onProgress: function (a) { say('Reading your GPS position… ±' + Math.round(a) + ' m'); } });
+            pos = { coords: { latitude: p.latitude, longitude: p.longitude, accuracy: p.accuracy } };
+        }
+        catch (e) { if (btn) btn.disabled = false; say(errText(e), true); return; }
         var acc = Math.round(pos.coords.accuracy || 9999);
         if (acc > MAX_ADD_ACCURACY_M) {
             if (btn) btn.disabled = false;
-            say('GPS is not accurate enough yet (±' + acc + ' m, need ±' + MAX_ADD_ACCURACY_M + ' m or better). Wait a few seconds and try again.', true);
+            say('GPS is not accurate enough (±' + acc + ' m, need ±' + MAX_ADD_ACCURACY_M + ' m or better). Stand at the shop with your phone under open sky and try again — a laptop has no GPS.', true);
             return;
         }
         var phone = (($('sos-new-phone') || {}).value || '').trim();
@@ -606,8 +609,59 @@
         if (pick && typeof global[pick] === 'function') global[pick](val);
     }
 
+    /**
+     * Sales, the same everywhere (Sales Analysis, targets, dashboards, top performers):
+     *   booked orders (server, every product line at its price)  +  DP Sales from the Weekly Stock Report.
+     * The stock report's own "SO Sales" column is not added again - those sales are the orders - so nothing is counted twice.
+     * Returns stock-entry shaped rows, so every chart that read stock entries keeps working.
+     */
+    function salesEntries(entries, orders) {
+        var out = (entries || []).map(function (e) {
+            var c = {}; for (var k in e) c[k] = e[k];
+            c.soSales = 0; c.totalSales = Number(e.dpSales) || 0; c._stock = true;
+            return c;
+        });
+        (orders || []).forEach(function (o) {
+            if (!o || o.status === 'CANCELLED') return;
+            (o.items || []).forEach(function (it) {
+                var q = Number(it.qty) || 0;
+                if (!q) return;
+                out.push({ officerId: o.officerId, date: o.date, product: it.name, category: String(it.category || '').toUpperCase(),
+                    soSales: q, dpSales: 0, totalSales: q, unitPrice: Number(it.price) || 0, dpName: null, shopName: o.shopName, _order: o.id });
+            });
+        });
+        return out;
+    }
+
+    /**
+     * ASM / Admin standing at a shop: replace its saved location with the phone's accurate GPS position (±30 m or better;
+     * a laptop is refused). save(body) is the caller's update call (team or admin endpoint). Resolves true when saved.
+     */
+    async function pinShopHere(shop, save) {
+        if (!shop || typeof save !== 'function') return false;
+        if (!global.confirm('Set the saved location of "' + shop.name + '" to where you are standing now?\n\nOnly do this while you are AT the shop, with your phone.')) return false;
+        toast('📡 Reading your GPS… stay still for a few seconds');
+        var p;
+        try {
+            p = await api().getAccuratePosition({ goodM: 12, maxM: api().SHOP_PIN_MAX_M,
+                onProgress: function (a) { toast('📡 Reading your GPS… ±' + Math.round(a) + ' m'); } });
+        } catch (e) { toast(errText(e), true); return false; }
+        var body = {
+            code: shop.code || null, name: shop.name, locality: shop.locality || null, region: shop.region || null,
+            address: shop.address || null, phone: shop.phone || null, latitude: p.latitude, longitude: p.longitude,
+            allowedRadiusMeters: shop.allowedRadiusMeters, assignedOfficerId: shop.assignedOfficerId == null ? null : shop.assignedOfficerId,
+            status: shop.status, city: shop.city || null, productCategories: shop.productCategories || null
+        };
+        try { await save(body); }
+        catch (e) { toast(errText(e), true); return false; }
+        toast('📍 Location of ' + shop.name + ' saved (GPS ±' + Math.round(p.accuracy) + ' m)');
+        return true;
+    }
+
     // expose what the other parts need
     global.SOSales = {
+        pinShopHere: pinShopHere,
+        salesEntries: salesEntries,
         state: S,
         isSO: isSO,
         filterShops: function (q) { renderMyShopList(q); },

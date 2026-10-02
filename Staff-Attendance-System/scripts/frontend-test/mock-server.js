@@ -183,6 +183,52 @@ function createMock() {
             S.atts.push(a); S.photos.set(a.id, { data: d, type: isPng ? 'image/png' : 'image/jpeg' });
             log(caller.id, 'CHECK_IN', `Checked in at shop ${shop.code} '${shop.name}', ${Math.round(dist)} m, live photo saved`); return [201, attResp(a, false)];
         }
+        // ---- shop visits (mirrors ShopVisitService): every shop of the day; the first one is also the check-in
+        if (method === 'POST' && p === '/api/attendance/shop-visit') {
+            need('SO');
+            const f = body.fields, shop = S.shops.find(x => x.id === Number(f.shopId));
+            if (!shop) throw new ApiErr(404, 'NOT_FOUND', 'Shop not found.');
+            if (!usableBy(shop, caller)) throw new ApiErr(403, 'SHOP_NOT_ASSIGNED', 'That shop is not assigned to you.');
+            const gps = { latitude: Number(f.latitude), longitude: Number(f.longitude), accuracy: Number(f.accuracy) };
+            validateFix(gps);
+            const dist = haversine(gps.latitude, gps.longitude, shop.latitude, shop.longitude);
+            if (dist > shop.allowedRadiusMeters) throw bad('OUTSIDE_GEOFENCE', `You are ${Math.round(dist)} m from ${shop.name}.`,
+                { distanceMeters: Math.round(dist), allowedRadiusMeters: shop.allowedRadiusMeters, shopId: shop.id, shopName: shop.name });
+            const ph = body.files.photo;
+            if (!ph || !ph.data.length) throw bad('PHOTO_REQUIRED', 'A live photo of the shop is required for every visit.');
+            const d = ph.data, isJpeg = d[0] === 0xFF && d[1] === 0xD8 && d[2] === 0xFF, isPng = d[0] === 0x89 && d[1] === 0x50 && d[2] === 0x4E && d[3] === 0x47;
+            if (!isJpeg && !isPng) throw bad('INVALID_PHOTO', 'The photo must be a JPEG, PNG or WebP image.');
+            const t = nowLdt();
+            let a = S.atts.find(x => x.userId === caller.id && x.attendanceDate === todayIso()), first = false;
+            if (!a) {
+                first = true;
+                a = { id: ++S.seq.att, userId: caller.id, attendanceDate: t.slice(0, 10), checkInTime: t, checkInLatitude: gps.latitude, checkInLongitude: gps.longitude,
+                    checkInAccuracy: gps.accuracy, checkInDistanceMeters: Math.round(dist * 10) / 10, status: statusFor(t), shopId: shop.id, deviceInfo: f.deviceInfo };
+                S.atts.push(a); S.photos.set(a.id, { data: d, type: isPng ? 'image/png' : 'image/jpeg' });
+                log(caller.id, 'CHECK_IN', `Checked in at shop ${shop.code} '${shop.name}', ${Math.round(dist)} m, live photo saved`);
+            }
+            S.visits = S.visits || [];
+            const v = { id: (S.visits.length + 1), officerId: caller.id, attendanceId: a.id, shopId: shop.id, shopName: shop.name, date: todayIso(), visitTime: t,
+                latitude: gps.latitude, longitude: gps.longitude, accuracy: gps.accuracy, distanceMeters: Math.round(dist * 10) / 10,
+                allowedRadiusMeters: shop.allowedRadiusMeters, firstOfDay: first, hasPhoto: true, photo: { data: d, type: isPng ? 'image/png' : 'image/jpeg' } };
+            S.visits.push(v);
+            const n = S.visits.filter(x => x.officerId === caller.id && x.date === todayIso()).length;
+            const { photo, ...pubV } = v;
+            return [201, { ...pubV, officerName: caller.name, visitNumber: n, attendance: attResp(a, false) }];
+        }
+        if (method === 'GET' && p === '/api/attendance/visits') {
+            const to = q.to || todayIso(), from = q.from || to;
+            let ids = scopeIds(caller);
+            if (q.officerId) { if (ids && !ids.has(Number(q.officerId))) throw new ApiErr(403, 'OUT_OF_SCOPE', 'You can only view people who report to you.'); ids = new Set([Number(q.officerId)]); }
+            return [200, (S.visits || []).filter(v => (!ids || ids.has(v.officerId)) && v.date >= from && v.date <= to)
+                .sort((a, b) => b.visitTime.localeCompare(a.visitTime))
+                .map(v => { const { photo, ...pubV } = v; return { ...pubV, officerName: (S.users.find(u => u.id === v.officerId) || {}).name, visitNumber: 0, attendance: null }; })];
+        }
+        if (method === 'GET' && (m = /^\/api\/attendance\/visits\/(\d+)\/photo$/.exec(p))) {
+            const v = (S.visits || []).find(x => x.id === Number(m[1])); if (!v) throw new ApiErr(404, 'NOT_FOUND', 'Visit not found.');
+            const ids = scopeIds(caller); if (ids && !ids.has(v.officerId)) throw new ApiErr(403, 'OUT_OF_SCOPE', 'You can only view people who report to you.');
+            return [200, v.photo.data, v.photo.type];
+        }
         if (method === 'GET' && (m = /^\/api\/attendance\/(\d+)\/photo$/.exec(p))) {
             const a = S.atts.find(x => x.id === Number(m[1])); if (!a) throw new ApiErr(404, 'NOT_FOUND', 'Attendance record not found.');
             const ids = scopeIds(caller); if (ids && !ids.has(a.userId)) throw new ApiErr(403, 'OUT_OF_SCOPE', 'You can only view people who report to you.');

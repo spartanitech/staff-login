@@ -16,8 +16,13 @@ require('fs').mkdirSync(SHOTS, { recursive: true });
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
   const month = today.slice(0, 7);
   const id = n => S.users.find(u => u.name === n).id;
-  const add = (who, product, so, dp, price) => S.stock.push({ id: ++S.seq.stock, officerId: id(who), date: today, product, category: 'DRY FRUITS',
-    opening: 100, receipt: 0, totalStock: 100, soSales: so, dpSales: dp, totalSales: so + dp, closing: 100 - so - dp, unitPrice: price, dpName: null });
+  // Sales = booked orders + DP Sales: the SO-sales quantity is also booked as an order, so the totals are unchanged
+  const add = (who, product, so, dp, price) => {
+    S.stock.push({ id: ++S.seq.stock, officerId: id(who), date: today, product, category: 'DRY FRUITS',
+      opening: 100, receipt: 0, totalStock: 100, soSales: so, dpSales: dp, totalSales: so + dp, closing: 100 - so - dp, unitPrice: price, dpName: null });
+    if (so) S.orders.push({ id: ++S.seq.order, officerId: id(who), clientRef: today + '|' + product, shopName: 'Shop of ' + who, date: today,
+      items: [{ name: product, category: 'DRY FRUITS', price, qty: so }], itemCount: 1, total: so * price, status: 'CONFIRMED' });
+  };
   add('Ravi', 'Almond California (100GM)', 10, 5, 200);     // 3,000
   add('Murugan', 'Walnut (100GM)', 2, 3, 300);              // 1,500
   add('Kumar', 'Full Cashew (100GM)', 6, 0, 250);           // 1,500

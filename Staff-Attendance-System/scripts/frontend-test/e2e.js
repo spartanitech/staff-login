@@ -99,6 +99,7 @@ async function openPortal(base, captured) {
     await waitFor(() => dom.window.SPBridge && dom.window.SPAdmin && dom.window.document.readyState === 'complete', 'scripts loaded');
     const w = dom.window;
     w.XLSX = { ...XLSX, writeFile: (wb, name) => captured.xlsx.push({ name, wb }) };
+    w.ExcelJS = w.ExcelJS || {};   // the page loads its export libraries after the first screen; these stand in for them
     w.jspdf = { jsPDF: class extends jsPDF {
         constructor(...a) { super(...a); this.save = name => { captured.pdf.push({ name, bytes: this.output('arraybuffer').byteLength, pages: this.getNumberOfPages() }); }; }
     } };
@@ -313,6 +314,7 @@ const visible2 = (d, id) => d.getElementById(id).classList.contains('open');
 
     check('plain (non-shop) check-in is rejected for a Sales Officer', await p.w.SPApi.checkIn({ latitude: shp001.latitude, longitude: shp001.longitude, accuracy: 10 }).then(() => false, e => e.status === 400 && e.code === 'SHOP_CHECKIN_REQUIRED'));
 
+    geo.next = { lat: shp001.latitude + 0.02, lng: shp001.longitude, acc: 10 };   // nearest of Ravi's shops is SHP001 (the popup now follows the nearest shop)
     await openShopPopup(p);
     check('CHECK IN opens the shop-visit popup (Login > Select Shop > GPS ON > Check Distance > Live Camera > Attendance)', visible2(p.d, 'so-attendance-overlay'));
     check('shop popup pre-selects the officer\'s own backend-assigned shop', p.d.getElementById('so-att-shop-select').value === shp001.code && text(p.d, '#so-att-shop-details').includes('Sri Ganesh Stores'));

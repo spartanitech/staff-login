@@ -1,7 +1,7 @@
 /*
  * portal-live.js — makes the role dashboards run on server data instead of the demo numbers the page was built with.
  *
- *   Live sales      Sales = SO Sales + DP Sales x unit price from every Sales Officer's Weekly Stock Report
+ *   Live sales      Sales = booked orders (server) + DP Sales x unit price from the Weekly Stock Report (SOSales.salesEntries)
  *                   (GET /api/stock/team). Sales Analysis (all filters, Category-wise and Product-wise share), the
  *                   RM / Marketing Manager dashboards, the ASM performance table and the Team Targets screens all
  *                   read it, together with the monthly targets (GET /api/targets/team), the team's shops
@@ -115,7 +115,9 @@
                 isManagerRole(r) ? api().teamShops().catch(function () { return null; }) : Promise.resolve(null),
                 api().teamTargets(month).catch(function () { return null; }),
                 api().teamStock(from, today).catch(function () { return null; }),
-                isManagerRole(r) ? api().teamAttendance({ from: today, to: today, size: 500 }).catch(function () { return null; }) : Promise.resolve(null)
+                isManagerRole(r) ? api().teamAttendance({ from: today, to: today, size: 500 }).catch(function () { return null; }) : Promise.resolve(null),
+                api().orders ? api().orders({ from: from, to: today }).catch(function () { return null; }) : Promise.resolve(null),
+                api().visits ? api().visits({ from: today, to: today }).catch(function () { return null; }) : Promise.resolve(null)
             ];
             var res = await Promise.all(jobs);
             if (res[0]) setUsers(res[0]);
@@ -125,7 +127,9 @@
             if (r === 'SO') {
                 try { var mine = await api().target({ month: month }); L.targets = mine ? [mine] : []; } catch (e) { /* keep */ }
             }
-            if (res[3]) L.entries = res[3];
+            if (res[5]) L.orders = res[5];
+            if (res[6]) L.visits = res[6];
+            if (res[3] || res[5]) L.entries = SO.salesEntries(res[3] || [], L.orders || []);   // orders + DP sales (see SOSales.salesEntries)
             if (res[4]) L.attendance = Array.isArray(res[4]) ? res[4] : (res[4].content || res[4].items || []);
             L.month = month;
             L.loaded = true; L.at = Date.now();
@@ -165,15 +169,20 @@
         o.sales = todaySales;
         o.collection = 0;
         o.orders = L.entries.filter(function (e) { return e.officerId === u.id && e.date.slice(0, 7) === month && (e.soSales + e.dpSales) > 0; })
-            .reduce(function (acc, e) { acc[e.date] = true; return acc; }, {});
+            .reduce(function (acc, e) { acc[e._order ? 'o' + e._order : e.date + '|' + (e.dpName || '')] = true; return acc; }, {});
         o.orders = Object.keys(o.orders).length;
-        o.recentOrders = (o.recentOrders || []).filter(function (x) { return !DEMO_ORDER.test(String(x.orderNo || '')); });
+        // the officer's real orders (server), newest first - the report screens list these instead of demo rows
+        o.recentOrders = (L.orders || []).filter(function (x) { return x.officerId === u.id && x.status !== 'CANCELLED'; }).slice(0, 50).map(function (x) {
+            return { orderNo: 'ORD-' + x.id, shop: x.shopName, amount: Number(x.total) || 0, status: 'Confirmed', orderedOn: x.date + 'T12:00:00', date: x.date, _server: true };
+        });
         if (o.tasks && o.tasks.length && !o._liveTasks) { o.tasks = []; o._liveTasks = true; }
         // The officer's own shops (server) are their visit plan; a shop is "Completed" when they checked in there today.
         var mineShops = L.shops.filter(function (s) { return s.assignedOfficerId === u.id; });
         if (!S.user || S.user.id !== u.id) {
             var visited = {};
             L.attendance.forEach(function (a) { if (a.userId === u.id && a.shopName) visited[a.shopName] = a; });
+            // every shop visited today (not only the first check-in), from the server, so it is the same on every device
+            (L.visits || []).forEach(function (v) { if (v.officerId === u.id && v.shopName && !visited[v.shopName]) visited[v.shopName] = { checkInTime: v.visitTime }; });
             o.plannedVisitsList = mineShops.map(function (s) {
                 var a = visited[s.name];
                 return { shop: s.name, location: s.locality || s.city || '', time: a && a.checkInTime ? String(a.checkInTime).slice(11, 16) : '—',
@@ -256,10 +265,10 @@
             var qty = (Number(e.soSales) || 0) + (Number(e.dpSales) || 0);
             if (!qty) return;
             if (onlyCat && String(e.category || productCategory(e.product)).toUpperCase() !== onlyCat) return;
-            var key = e.officerId + '|' + e.date + '|' + (e.dpName || '');
+            var key = e._order ? 'o' + e._order : e.officerId + '|' + e.date + '|' + (e.dpName || '');
             var u = L.byId[e.officerId] || {};
             var g = groups[key] || (groups[key] = {
-                shop: e.dpName || 'Direct (no DP)',
+                shop: e._order ? (e.shopName || 'Shop order') : (e.dpName ? 'DP: ' + e.dpName : 'DP sales'),
                 officer: u.name || '',
                 city: u.area || '',
                 order: { total: 0, items: [], orderedOn: e.date + 'T12:00:00' }
@@ -286,7 +295,7 @@
         if (global.officerRealOrders && !global.officerRealOrders.__live) {
             var ro = function (o) {
                 var id = idOf(o), days = {};
-                L.entries.forEach(function (e) { if (e.officerId === id && monthOf(e.date) === month() && (e.soSales + e.dpSales) > 0) days[e.date + (e.dpName || '')] = 1; });
+                L.entries.forEach(function (e) { if (e.officerId === id && monthOf(e.date) === month() && (e.soSales + e.dpSales) > 0) days[e._order ? 'o' + e._order : e.date + (e.dpName || '')] = 1; });
                 return Object.keys(days).length;
             };
             ro.__live = true;
@@ -308,7 +317,7 @@
         if (typeof kpiHtml === 'function' && !kpiHtml.__live) {
             var kh = function () {
                 return String(kpiHtml.apply(this, arguments) || '')
-                    .replace('>Orders Booked<', '>Sales Reports<').replace('>Shops Covered<', '>DPs Covered<').replace('>Avg. Order Value<', '>Avg. per Report<');
+                    .replace('>Shops Covered<', '>Shops / DPs<');   // rows are shop orders + DP sales from the stock report
             };
             kh.__live = true;
             global.saKPIsHTML = kh;
@@ -317,7 +326,7 @@
         if (typeof share === 'function' && !share.__live) {
             var sh = function () {
                 return String(share.apply(this, arguments) || '')
-                    .replace(/No orders booked in this month yet\.[^<]*/, 'No sales reported for this selection yet. Sales appear here once Sales Officers save their stock report (SO Sales + DP Sales).')
+                    .replace(/No orders booked in this month yet\.[^<]*/, 'No sales for this selection yet. Sales appear here once Sales Officers book orders or save DP Sales in their stock report.')
                     .replace(/across (\d+) orders?\./, 'across $1 sales report(s).')
                     .replace(' Tap a shop for its order history.', '');
             };
@@ -467,7 +476,7 @@
                 fillMgrFilterOptions();
                 call('renderMgrSalesAnalysis');
                 var subEl = $('mgr-sa-subtitle');
-                if (subEl) subEl.textContent = 'SO Sales + DP Sales x price, from the stock reports of ' + (role() === 'ASM' ? 'your Sales Officers' : 'the Sales Officers in your team');
+                if (subEl) subEl.textContent = 'Booked orders + DP Sales, from the orders and stock reports of ' + (role() === 'ASM' ? 'your Sales Officers' : 'the Sales Officers in your team');
                 if (!L.loading && Date.now() - L.at > 30000) load(true);
                 return out;
             };
@@ -700,7 +709,7 @@
             var target = targetOf(u.id), pct = pctOf(so + dp, target);
             return '<tr><td data-l="Sales Officer"><b>' + esc(u.name) + '</b><div class="sos-sub">' + esc(u.area || '') + '</div></td>' +
                 '<td data-l="Target">' + (target ? inr(target) : '<span class="sos-sub">Not set</span>') + '</td>' +
-                '<td data-l="SO Sales">' + inr(so) + '</td><td data-l="DP Sales">' + inr(dp) + '</td><td data-l="Total"><b>' + inr(so + dp) + '</b></td>' +
+                '<td data-l="Orders">' + inr(so) + '</td><td data-l="DP Sales">' + inr(dp) + '</td><td data-l="Total"><b>' + inr(so + dp) + '</b></td>' +
                 '<td data-l="Achieved" style="min-width:110px">' + (target ? '<div class="sos-prog" style="margin:0 0 3px"><div style="width:' + Math.min(100, pct) + '%"></div></div>' + pct + '%' : '—') + '</td></tr>';
         }).join('');
         var tot = team.reduce(function (acc, u) { var one = {}; one[u.id] = true; acc.t += targetOf(u.id); acc.s += salesOf(one, month + '-01', todayIso()); return acc; }, { t: 0, s: 0 });
@@ -714,9 +723,9 @@
 
         host.innerHTML =
             '<div class="sos-card lv-card"><div class="sos-head"><div><div class="sos-title">🎯 Targets vs Sales — ' + esc(H.monthLabel(month)) + '</div>' +
-            '<div class="sos-sub">Sales = SO Sales + DP Sales from each officer\'s stock report · team ' + inr(tot.s) + ' of ' + (tot.t ? inr(tot.t) : 'no target') + '</div></div>' +
+            '<div class="sos-sub">Sales = booked orders + DP Sales from the stock report · team ' + inr(tot.s) + ' of ' + (tot.t ? inr(tot.t) : 'no target') + '</div></div>' +
             (canManage ? '<button class="sos-btn pri" onclick="SOReports.openTeam(\'targets\')">Set targets</button>' : '') + '</div>' +
-            (team.length ? '<table class="sos-tbl"><thead><tr><th>Sales Officer</th><th>Target</th><th>SO Sales</th><th>DP Sales</th><th>Total</th><th>Achieved</th></tr></thead><tbody>' + tRows + '</tbody></table>'
+            (team.length ? '<table class="sos-tbl"><thead><tr><th>Sales Officer</th><th>Target</th><th>Orders</th><th>DP Sales</th><th>Total</th><th>Achieved</th></tr></thead><tbody>' + tRows + '</tbody></table>'
                 : '<div class="sos-empty">No active Sales Officer reports to you yet.</div>') + '</div>' +
             '<div class="sos-card lv-card"><div class="sos-head"><div><div class="sos-title">🏬 Team Shops <span class="sos-sub">(' + shops.length + ')</span></div>' +
             '<div class="sos-sub">The shops your Sales Officers check in at</div></div>' +

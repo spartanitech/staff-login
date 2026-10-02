@@ -3,7 +3,8 @@
 const puppeteer = require('puppeteer-core');
 const { createMock } = require('../frontend-test/mock-server.js');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const OUT = process.env.SHOTS || '/tmp/claude-0/mob';
+const OUT = process.env.SHOTS || require('path').join(require('os').tmpdir(), 'mobile-audit');
+require('fs').mkdirSync(OUT, { recursive: true });
 (async () => {
   const mock = createMock(); await new Promise(r => mock.server.listen(0, '127.0.0.1', r));
   const base = 'http://127.0.0.1:' + mock.server.address().port + '/';
@@ -50,6 +51,10 @@ const OUT = process.env.SHOTS || '/tmp/claude-0/mob';
   await asm.evaluate(() => { const a = document.getElementById('asm2-nav-teamshops'); if (a) a.click(); }); await sleep(1200); await audit(asm, 'asm-teamshops');
   const so = await login('sales01', 'Sales@123', 'so-dashboard-view');
   await audit(so, 'so-home');
-  console.log('errors', ad.errors, asm.errors, so.errors);
+  const rm = await login('regional01', 'password123', 'rm-dashboard-view'); await audit(rm, 'rm-home');
+  const mm = await login('marketing01', 'password123', 'rsm-dashboard-view'); await audit(mm, 'mm-home');
+  const ow = await login('owner01', 'password123', 'dashboard-view'); await audit(ow, 'owner-home');
+  await so.evaluate(() => openDailyShopReport()); await sleep(1200); await audit(so, 'so-dsr');
+  console.log('errors', ad.errors, asm.errors, so.errors, rm.errors, mm.errors, ow.errors);
   await browser.close(); mock.server.close();
 })().catch(e => { console.error(e); process.exit(1); });

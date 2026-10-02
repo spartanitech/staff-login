@@ -143,6 +143,7 @@
             return err.message || MESSAGES.VALIDATION_FAILED;
         }
         if (err.code === 'CONFLICT' && d.cause) return MESSAGES.CONFLICT + ' — ' + d.cause;
+        if (err.code && String(err.code).indexOf('GPS_') === 0 && err.message) return err.message;   // GPS problems on this device, not the network
         if (err.code && MESSAGES[err.code] && err.code !== 'INTERNAL_ERROR') return MESSAGES[err.code];
         if (err.status === 0) return MESSAGES.NETWORK;
         if (err.status === 401) return MESSAGES.UNAUTHENTICATED;
@@ -186,6 +187,54 @@
         });
     }
 
+    /**
+     * The most accurate position this device can give within `waitMs` (default 15 s): a phone's first answer is often a
+     * rough network fix, so readings are collected and the best one is kept. Resolves as soon as it is within `goodM`.
+     * With `maxM`, a best reading worse than that is refused (GPS_NOT_ACCURATE) - a laptop (no GPS, ±99 m or worse)
+     * can never pin a shop.  onProgress(accuracy) lets the screen show the reading improving.
+     */
+    function getAccuratePosition(opts) {
+        opts = opts || {};
+        var goodM = opts.goodM || 20, waitMs = opts.waitMs || 15000, maxM = opts.maxM || null;
+        return new Promise(function (resolve, reject) {
+            if (!global.isSecureContext && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(global.location.hostname)) {
+                return reject(ApiError(0, 'GPS_INSECURE', 'Location needs a secure (HTTPS) connection. Open the portal using its https:// address.'));
+            }
+            var geo = global.navigator && global.navigator.geolocation;
+            if (!geo) return reject(ApiError(0, 'GPS_UNSUPPORTED', 'This device or browser does not support location.'));
+            if (typeof geo.watchPosition !== 'function') return getPosition().then(check, reject);
+            var best = null, done = false, id = null, timer = null;
+            function out(p) { return { latitude: p.coords.latitude, longitude: p.coords.longitude, accuracy: p.coords.accuracy }; }
+            function check(p) {
+                if (maxM && !(p.accuracy <= maxM)) {
+                    return reject(ApiError(0, 'GPS_NOT_ACCURATE', 'GPS is not accurate enough (±' + Math.round(p.accuracy) + ' m, need ±' + maxM +
+                        ' m or better). Stand at the shop with a phone, under open sky, and try again. A laptop or desktop has no GPS.'));
+                }
+                resolve(p);
+            }
+            function finish() {
+                if (done) return; done = true;
+                try { geo.clearWatch(id); } catch (e) { /* ignore */ }
+                clearTimeout(timer);
+                if (best) check(out(best)); else reject(ApiError(0, 'GPS_TIMEOUT', 'Getting your location took too long. Move to an open area, make sure GPS is on, and try again.'));
+            }
+            id = geo.watchPosition(function (p) {
+                if (!best || p.coords.accuracy < best.coords.accuracy) best = p;
+                if (opts.onProgress) { try { opts.onProgress(best.coords.accuracy); } catch (e) { /* ignore */ } }
+                if (best.coords.accuracy <= goodM) finish();
+            }, function (err) {
+                if (best || done) return;
+                done = true; clearTimeout(timer);
+                reject(ApiError(0, err && err.code === 1 ? 'GPS_DENIED' : 'GPS_UNAVAILABLE', err && err.code === 1
+                    ? 'Location permission was denied. Allow location for this site in your browser settings, then try again.'
+                    : 'Could not read your location. Turn on GPS and try again.'));
+            }, { enableHighAccuracy: true, timeout: waitMs + 5000, maximumAge: 0 });
+            timer = setTimeout(finish, waitMs);
+        });
+    }
+    // a shop's saved location is only taken from a reading this good (a laptop gives ±99 m or worse)
+    var SHOP_PIN_MAX_M = 30;
+
     function deviceInfo() {
         var ua = (global.navigator && global.navigator.userAgent) || '';
         return ua.slice(0, 250);
@@ -199,6 +248,8 @@
         user: function () { return session.user; },
         friendlyError: friendlyError,
         getPosition: getPosition,
+        getAccuratePosition: getAccuratePosition,
+        SHOP_PIN_MAX_M: SHOP_PIN_MAX_M,
         clearSession: clearSession,
 
         login: async function (username, password) {
@@ -245,11 +296,14 @@
         // Sales Officer adds a shop they work at (pinned at their GPS position, assigned to them)
         createMyShop: function (body) { return request('POST', '/api/shops/mine', { body: body }); },
         shopCheckIn: function (form) { return request('POST', '/api/attendance/shop-check-in', { form: form }); },
+        // every shop visit (GPS + live photo); the first of the day is also the attendance check-in
+        shopVisit: function (form) { return request('POST', '/api/attendance/shop-visit', { form: form }); },
+        visits: function (q) { return request('GET', '/api/attendance/visits', { query: q }); },
         // the live photo of a check-in, as a Blob (the endpoint needs the Authorization header, so an <img src> cannot fetch it)
-        attendancePhoto: async function (id) {
+        attendancePhoto: async function (id, kind) {
             var res;
             try {
-                res = await fetch(BASE + '/api/attendance/' + encodeURIComponent(id) + '/photo', {
+                res = await fetch(BASE + '/api/attendance/' + (kind === 'visit' ? 'visits/' : '') + encodeURIComponent(id) + '/photo', {
                     headers: session.token ? { 'Authorization': 'Bearer ' + session.token } : {}, cache: 'no-store'
                 });
             } catch (netErr) { throw ApiError(0, 'NETWORK', 'Cannot reach the server.'); }

@@ -155,6 +155,11 @@
         '.sp-team-row:last-child{border-bottom:none}',
         '.sp-team-row input{margin-top:3px;width:16px;height:16px;flex:none}',
         '.sp-team-note{color:#7A869A}', '.sp-team-move{color:#C2410C}',
+        '.sp-vlist{margin-top:6px;padding-top:4px;border-top:1px dashed #E4EEF9;line-height:1.5}',
+        '.sp-visits{margin-top:12px;border-top:1px solid #EEF3FA;padding-top:10px}.sp-visits-h{font-size:13px;font-weight:700;margin-bottom:6px}',
+        '.sp-visit{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px dashed #EEF3FA}.sp-visit:last-child{border-bottom:0}',
+        '.sp-visit-n{width:24px;height:24px;border-radius:50%;background:#EAF1FC;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none}',
+        '.sp-visit-m{flex:1;min-width:0;font-size:13px;overflow-wrap:anywhere}',
         '@media (max-width:640px){.sp-att-card{padding:14px}.sp-btn{padding:12px 16px;flex:1 1 auto}.sp-modal-card{padding:18px 14px}}'
     ].join('\n');
 
@@ -228,10 +233,37 @@
             a.employeeCode || '', a.employeeName || '', roleLabel(a.role), fmtDate(a.attendanceDate),
             fmtTime(a.checkInTime), a.checkOutTime ? fmtTime(a.checkOutTime) : '—',
             a.checkOutTime ? (a.workingHours || minutesText(a.totalWorkingMinutes)) : '—',
-            STATUS_LABEL[a.status] || a.status || '', a.workLocationName || a.shopName || '—',
+            STATUS_LABEL[a.status] || a.status || '',
+            a.visits && a.visits.length ? a.visits.map(function (v) { return fmtTime(v.visitTime) + ' ' + v.shopName; }).join('; ') : (a.workLocationName || a.shopName || '—'),
             gpsText(a.checkInLatitude, a.checkInLongitude, a.checkInAccuracy),
             gpsText(a.checkOutLatitude, a.checkOutLongitude, a.checkOutAccuracy)
         ];
+    }
+
+    /**
+     * Adds every shop visited that day (server shop visits) to each attendance row as a.visits, so history, team and
+     * admin reports list all the shops - not only the check-in shop. Visits the caller may not see are never returned.
+     */
+    async function attachVisits(rows) {
+        if (!rows || !rows.length || !global.SPApi.visits) return rows;
+        var dates = rows.map(function (a) { return a.attendanceDate; }).filter(Boolean).sort();
+        var list;
+        try { list = await global.SPApi.visits({ from: dates[0], to: dates[dates.length - 1] }); } catch (e) { return rows; }
+        var by = {};
+        (list || []).forEach(function (v) { (by[v.officerId + '|' + v.date] = by[v.officerId + '|' + v.date] || []).push(v); });
+        rows.forEach(function (a) {
+            var vs = by[a.userId + '|' + a.attendanceDate];
+            if (vs) a.visits = vs.sort(function (x, y) { return String(x.visitTime).localeCompare(String(y.visitTime)); });
+        });
+        return rows;
+    }
+    function visitsCell(a) {
+        if (!a.visits || a.visits.length < 1) return '';
+        return '<div class="sp-vlist"><small><b>' + a.visits.length + ' shop' + (a.visits.length === 1 ? '' : 's') + ' visited:</b></small>' +
+            a.visits.map(function (v) {
+                return '<div><small>' + esc(fmtTime(v.visitTime)) + ' · ' + esc(v.shopName) + ' · ' + Math.round(v.distanceMeters) + ' m</small>' +
+                    (v.hasPhoto ? ' <button type="button" class="sp-btn sp-btn-sm sp-btn-ghost" style="padding:2px 6px" data-vphoto="' + v.id + '">📷</button>' : '') + '</div>';
+            }).join('') + '</div>';
     }
 
     function attTableHtml(rows, opts) {
@@ -252,7 +284,7 @@
                 '<td>' + (a.checkOutTime ? esc(fmtTime(a.checkOutTime)) : '—') + '</td>' +
                 '<td>' + (a.checkOutTime ? esc(a.workingHours || minutesText(a.totalWorkingMinutes)) : '—') + '</td>' +
                 '<td>' + statusBadge(a.status) + corrected + '</td>' +
-                '<td>' + esc(a.workLocationName || a.shopName || '—') + (a.shopCode ? '<br><small>' + esc(a.shopCode) + '</small>' : '') + '</td>' +
+                '<td>' + esc(a.workLocationName || a.shopName || '—') + (a.shopCode ? '<br><small>' + esc(a.shopCode) + '</small>' : '') + visitsCell(a) + '</td>' +
                 '<td>' + esc(gpsText(a.checkInLatitude, a.checkInLongitude, a.checkInAccuracy)) + dIn +
                 (a.hasPhoto ? '<br><button type="button" class="sp-btn sp-btn-sm sp-btn-ghost" data-photo="' + a.id + '">📷 Photo</button>' : '') + '</td>' +
                 '<td>' + esc(gpsText(a.checkOutLatitude, a.checkOutLongitude, a.checkOutAccuracy)) + dOut + '</td>' +
@@ -425,10 +457,24 @@
                 '<span class="sp-att-date">' + esc(roleLabel(u.role)) + ' · ' + esc(u.name) + '</span></div>') +
             '<div class="sp-att-grid">' + grid + '</div>' +
             '<div class="sp-actions">' + main + extra + '</div>' +
+            (u.role === 'SO' && Att.visits && Att.visits.length ? visitsHtml(Att.visits) : '') +
             (Att.msg ? '<div class="sp-msg sp-msg-' + Att.msg.kind + '" role="status">' + esc(Att.msg.text) + '</div>' : '') +
             (Att.lastFix ? '<div class="sp-muted">Last reading from this device: ' + esc(gpsText(Att.lastFix.latitude, Att.lastFix.longitude, Att.lastFix.accuracy)) +
                 ' · <a target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + encodeURIComponent(Att.lastFix.latitude + ',' + Att.lastFix.longitude) +
                 '">see it on the map</a> (if that is not where you are, this device has no real GPS - use a phone)</div>' : '');
+    }
+
+    /** Every shop visited today (from the server), newest first - so two, three or more shops all show, on any device. */
+    function visitsHtml(list) {
+        var rows = list.slice().sort(function (a, b) { return String(a.visitTime).localeCompare(String(b.visitTime)); });
+        return '<div class="sp-visits"><div class="sp-visits-h">🏪 Shop visits today <b>(' + rows.length + ')</b></div>' +
+            rows.map(function (v, i) {
+                return '<div class="sp-visit"><span class="sp-visit-n">' + (i + 1) + '</span><div class="sp-visit-m"><b>' + esc(v.shopName) + '</b>' +
+                    (v.firstOfDay ? ' <span class="sp-badge sp-b-PRESENT">Check-in</span>' : '') +
+                    '<div class="sp-muted" style="padding:2px 0 0">' + esc(fmtTime(v.visitTime)) + ' · ' + Math.round(v.distanceMeters) + ' m of ' +
+                    v.allowedRadiusMeters + ' m · GPS ±' + Math.round(v.accuracy) + ' m</div></div>' +
+                    (v.hasPhoto ? '<button type="button" class="sp-btn sp-btn-sm sp-btn-ghost" data-vphoto="' + v.id + '">📷</button>' : '') + '</div>';
+            }).join('') + '</div>';
     }
 
     function renderAll() {
@@ -466,6 +512,11 @@
         try { Att.state = await global.SPApi.today(); syncLegacyPresence(); }
         catch (e) {
             if (e.status !== 401) setMsg('err', global.SPApi.friendlyError(e));
+        }
+        if (Att.user.role === 'SO' && global.SPApi.visits) {
+            try { Att.visits = (await global.SPApi.visits({})) || []; } catch (e) { /* keep the last list */ }
+            // Today's Beat / visit plan follow the server: every visited shop counts as Visited straight away
+            try { if (global.SOOrders && global.SOOrders.visitsLoaded) global.SOOrders.visitsLoaded(Att.visits || [], Att.state && Att.state.attendance); } catch (e) { /* screens optional */ }
         }
         renderAll();
     }
@@ -520,7 +571,13 @@
     }
 
     /** null = not signed in to the backend (the original demo shops are used); otherwise exactly the officer's assigned shops. */
-    function serverShops() { return Att.user ? (Att.shops || []) : null; }
+    function serverShops() {
+        if (!Att.user) return null;
+        if (Att.shops && Att.shops.length) return Att.shops;
+        // not loaded on this device yet: the Sales Officer's server shops that so-sales.js already holds
+        var so = global.SOSales && global.SOSales.isSO && global.SOSales.isSO() ? global.SOSales.shops() : [];
+        return so.length ? so : [];
+    }
     function maxAccuracy() { return Att.state && Att.state.maxAccuracyMeters != null ? Att.state.maxAccuracyMeters : null; }
 
     async function openShopCheckIn() {
@@ -592,6 +649,27 @@
         var ov = $('#so-attendance-overlay'); if (ov) ov.classList.remove('open');
     }
 
+    /** Sends one shop visit (GPS + live photo) to the server. The first visit of the day is also the attendance check-in. */
+    async function postVisit(s) {
+        var photo = await preparePhoto(s.photo);
+        var fd = new FormData();
+        fd.append('shopId', String(s.shop._sid));
+        fd.append('latitude', String(s.deviceLat));
+        fd.append('longitude', String(s.deviceLng));
+        fd.append('accuracy', String(s.deviceAcc != null ? s.deviceAcc : 99999));   // no accuracy reported = not trustworthy
+        fd.append('deviceInfo', ((global.navigator && global.navigator.userAgent) || '').slice(0, 250));
+        fd.append('photo', photo, 'shop.jpg');
+        var r = await global.SPApi.shopVisit(fd);
+        Att.lastFix = { latitude: s.deviceLat, longitude: s.deviceLng, accuracy: s.deviceAcc };
+        return r;
+    }
+    function visitMessage(r, s) {
+        var a = r.attendance || {};
+        return (r.firstOfDay ? '✅ Attendance marked at ' : '✅ Visit ' + (r.visitNumber || '') + ' recorded at ') + (r.shopName || s.shop.name) +
+            ' at ' + fmtTime(r.visitTime) + ' · ' + Math.round(r.distanceMeters) + ' m from the shop (allowed ' + r.allowedRadiusMeters + ' m) · GPS ±' +
+            Math.round(r.accuracy) + ' m' + (r.firstOfDay && a.status ? ' · ' + (STATUS_LABEL[a.status] || a.status) : '') + ' · live photo saved';
+    }
+
     /** Called by the popup's "Next: Mark Present". `done` = the original local bookkeeping (closes the popup, updates the KPIs). */
     async function submitShopAttendance(s, done) {
         if (Att.busy || !s || !s.shop || !s.photo) return;
@@ -600,20 +678,10 @@
         if (typeof global.updateSOAttNextButton === 'function') global.updateSOAttNextButton();
         var saved = false;
         try {
-            var photo = await preparePhoto(s.photo);
-            var fd = new FormData();
-            fd.append('shopId', String(s.shop._sid));
-            fd.append('latitude', String(s.deviceLat));
-            fd.append('longitude', String(s.deviceLng));
-            fd.append('accuracy', String(s.deviceAcc != null ? s.deviceAcc : 99999));   // no accuracy reported = not trustworthy
-            fd.append('deviceInfo', ((global.navigator && global.navigator.userAgent) || '').slice(0, 250));
-            fd.append('photo', photo, 'shop.jpg');
-            var r = await global.SPApi.shopCheckIn(fd);
+            var r = await postVisit(s);
             saved = true;
-            Att.lastFix = { latitude: s.deviceLat, longitude: s.deviceLng, accuracy: s.deviceAcc };
-            setMsg('ok', '✅ Attendance marked at ' + (r.shopName || s.shop.name) + ' at ' + fmtTime(r.checkInTime) + ' · ' +
-                Math.round(r.checkInDistanceMeters) + ' m from the shop (allowed ' + r.allowedRadiusMeters + ' m) · GPS ±' +
-                Math.round(r.checkInAccuracy) + ' m · ' + (STATUS_LABEL[r.status] || r.status) + ' · live photo saved');
+            setMsg('ok', visitMessage(r, s));
+            if (global.SOOrders && global.SOOrders.visitSaved) global.SOOrders.visitSaved(r);
         } catch (e) {
             err.textContent = global.SPApi.friendlyError(e);
             err.style.display = '';
@@ -626,6 +694,25 @@
             global.updateSOAttNextButton();
         }
         await refreshToday();
+    }
+
+    /** The "Shop Visit" popup (2nd shop onward): same proof, saved as another visit. onError(text) shows the reason. */
+    async function submitShopVisit(s, done, onError) {
+        if (Att.busy || !s || !s.shop || !s.photo) return false;
+        Att.busy = true;
+        try {
+            var r = await postVisit(s);
+            setMsg('ok', visitMessage(r, s));
+            if (global.SOOrders && global.SOOrders.visitSaved) global.SOOrders.visitSaved(r);
+            Att.busy = false;
+            try { done(r); } catch (ex) { if (global.console) console.warn('Visit is saved; the local screen update failed:', ex); }
+            refreshToday();
+            return true;
+        } catch (e) {
+            Att.busy = false;
+            if (onError) onError(global.SPApi.friendlyError(e));
+            return false;
+        }
     }
 
     /** Keep the original (local) screens consistent with the server: if the server says I am in, the old "Shop visit" flow must agree. */
@@ -645,12 +732,12 @@
     }
 
     // ---- the live photo taken at check-in (any table row with data-photo) ------------------------
-    async function openPhoto(id) {
+    async function openPhoto(id, kind) {
         var url = null;
-        var body = openModal('Check-in photo', { onClose: function () { if (url) { try { URL.revokeObjectURL(url); } catch (e) { /* ignore */ } url = null; } } });
+        var body = openModal(kind === 'visit' ? 'Shop visit photo' : 'Check-in photo', { onClose: function () { if (url) { try { URL.revokeObjectURL(url); } catch (e) { /* ignore */ } url = null; } } });
         body.innerHTML = '<div class="sp-muted">Loading photo…</div>';
         try {
-            var blob = await global.SPApi.attendancePhoto(id);
+            var blob = await global.SPApi.attendancePhoto(id, kind);
             var ov = $('#sp-modal-overlay');
             if (!ov || !ov.classList.contains('open')) return;                                         // closed while loading
             url = URL.createObjectURL(blob);
@@ -687,7 +774,7 @@
                     global.SPApi.myAttendance({ from: f.from, to: f.to, status: f.status }),
                     global.SPApi.summary({ from: f.from, to: f.to, userId: me.id })
                 ]);
-                rowsCache = res[0]; sumCache = res[1];
+                rowsCache = await attachVisits(res[0]); sumCache = res[1];
                 out.innerHTML = kpiHtml(sumCache) + attTableHtml(rowsCache, {});
             } catch (e) {
                 out.innerHTML = '<div class="sp-msg sp-msg-err">' + esc(global.SPApi.friendlyError(e)) + '</div>';
@@ -773,7 +860,7 @@
                 body.innerHTML =
                     '<div style="font-weight:700;font-size:13px;margin-bottom:10px;">🗓️ This week (' + esc(fmtDate(wk)) + ' – ' + esc(fmtDate(today)) + ')</div>' + kpiHtml(res[0]) +
                     '<div style="font-weight:700;font-size:13px;margin:18px 0 10px;">📅 This month (' + esc(fmtDate(mo)) + ' – ' + esc(fmtDate(today)) + ')</div>' + kpiHtml(res[1]) +
-                    '<div style="font-weight:700;font-size:13px;margin:18px 0 10px;">Days you checked in</div>' + attTableHtml(res[2], {}) +
+                    '<div style="font-weight:700;font-size:13px;margin:18px 0 10px;">Days you checked in</div>' + attTableHtml(await attachVisits(res[2]), {}) +
                     '<p class="sp-muted">Counted by the server from your GPS check-ins. Weekly-off days are not working days.</p>';
             } catch (e) {
                 body.innerHTML = '<div class="sp-msg sp-msg-err">' + esc(global.SPApi.friendlyError(e)) + '</div>';
@@ -928,6 +1015,8 @@
     doc.addEventListener('click', function (e) {
         var b = e.target && e.target.closest ? e.target.closest('[data-photo]') : null;
         if (b) openPhoto(b.getAttribute('data-photo'));
+        var vb = e.target && e.target.closest ? e.target.closest('[data-vphoto]') : null;
+        if (vb) openPhoto(vb.getAttribute('data-vphoto'), 'visit');
     });
 
     global.SPBridge = {
@@ -939,12 +1028,13 @@
         serverShops: serverShops,
         maxAccuracy: maxAccuracy,
         submitShopAttendance: submitShopAttendance,
+        submitShopVisit: submitShopVisit,
         signOut: signOut,
         util: {
             $: $, $all: $all, esc: esc, pad: pad, fmtDate: fmtDate, fmtTime: fmtTime, minutesText: minutesText,
             todayIso: todayIso, addDays: addDays, weekStartIso: weekStartIso, monthStartIso: monthStartIso,
             gpsText: gpsText, statusBadge: statusBadge, roleLabel: roleLabel, kpiHtml: kpiHtml,
-            attTableHtml: attTableHtml, exportAttendance: exportAttendance,
+            attTableHtml: attTableHtml, attachVisits: attachVisits, exportAttendance: exportAttendance,
             openModal: openModal, closeModal: closeModal,
             ROLE_LABEL: ROLE_LABEL, STATUS_LABEL: STATUS_LABEL
         }
