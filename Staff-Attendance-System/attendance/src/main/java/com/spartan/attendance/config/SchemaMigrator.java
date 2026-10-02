@@ -38,7 +38,46 @@ public class SchemaMigrator implements ApplicationRunner {
             log.warn("Could not check/migrate audit_logs.action ({}). If a new audit action fails with 'Data truncated', "
                     + "run: ALTER TABLE audit_logs MODIFY COLUMN action VARCHAR(40) NOT NULL;", e.getMessage());
         }
+        dropAuditActionChecks();
         backfillStockTotals();
+    }
+
+    /**
+     * Hibernate 6 writes the enum's values at create time into a CHECK constraint on audit_logs.action
+     * ("check (action in ('LOGIN', ..., 'SHOP_DELETE'))"), and MySQL 8.0.16+ enforces it. ddl-auto=update never
+     * refreshes that list, so every audit action added later (TEAM_ASSIGN for "Save team") is rejected by the
+     * database and the whole request rolls back with a 500. The column is validated by the Java enum already, so the
+     * CHECK is dropped here. Does nothing when there is no such constraint.
+     */
+    private void dropAuditActionChecks() {
+        List<String> names;
+        try {
+            names = jdbc.queryForList(
+                    "select tc.constraint_name from information_schema.table_constraints tc "
+                            + "join information_schema.check_constraints cc "
+                            + "on cc.constraint_schema = tc.constraint_schema and cc.constraint_name = tc.constraint_name "
+                            + "where tc.table_schema = database() and tc.table_name = 'audit_logs' "
+                            + "and tc.constraint_type = 'CHECK' and lower(cc.check_clause) like '%action%'",
+                    String.class);
+        } catch (Exception e) {
+            log.debug("Skipped audit_logs CHECK lookup ({}).", e.getMessage());
+            return;
+        }
+        for (String name : names) {
+            String quoted = "`" + name.replace("`", "``") + "`";
+            try {
+                jdbc.execute("alter table audit_logs drop check " + quoted);              // MySQL 8.0.16+
+                log.info("Dropped CHECK constraint {} on audit_logs.action (it blocked new audit actions).", name);
+            } catch (Exception first) {
+                try {
+                    jdbc.execute("alter table audit_logs drop constraint " + quoted);     // MariaDB
+                    log.info("Dropped CHECK constraint {} on audit_logs.action (it blocked new audit actions).", name);
+                } catch (Exception e) {
+                    log.warn("Could not drop CHECK {} on audit_logs ({}). Run: ALTER TABLE audit_logs DROP CHECK {};",
+                            name, e.getMessage(), quoted);
+                }
+            }
+        }
     }
 
     /**
