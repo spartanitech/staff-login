@@ -22,10 +22,14 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.NestedExceptionUtils;
+import org.springframework.dao.DataAccessException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class UserService {
@@ -192,33 +196,46 @@ public class UserService {
             default -> throw ApiException.badRequest("NOT_A_MANAGER",
                     "Only a Marketing Manager, Regional Manager or Area Sales Manager has a team.");
         };
+        if (memberIds != null && memberIds.stream().anyMatch(java.util.Objects::isNull)) {   // List.of().contains(null) would throw
+            throw ApiException.badRequest("INVALID_MEMBER", "The team list contains an empty id. Reload the page and try again.");
+        }
         Set<Long> wanted = new HashSet<>(memberIds == null ? List.of() : memberIds);
+        log.info("Team save by admin {}: manager {} ({}, {}) -> members {}", admin.getId(), manager.getId(),
+                manager.getEmployeeCode(), manager.getRole(), wanted);
         List<String> added = new ArrayList<>();
         List<String> removed = new ArrayList<>();
-        for (Long id : wanted) {
-            User m = find(id);
-            if (m.getRole() != memberRole) {
-                throw ApiException.badRequest("WRONG_ROLE", m.getName() + " is not a " + MessageService.ROLE_TITLE.get(memberRole)
-                        + " - a " + MessageService.ROLE_TITLE.get(manager.getRole()) + "'s team is made of "
-                        + MessageService.ROLE_TITLE.get(memberRole) + "s.");
+        try {
+            for (Long id : wanted) {
+                User m = find(id);
+                if (m.getRole() != memberRole) {
+                    throw ApiException.badRequest("WRONG_ROLE", m.getName() + " is not a " + MessageService.ROLE_TITLE.get(memberRole)
+                            + " - a " + MessageService.ROLE_TITLE.get(manager.getRole()) + "'s team is made of "
+                            + MessageService.ROLE_TITLE.get(memberRole) + "s.");
+                }
+                if (m.getReportingManager() == null || !m.getReportingManager().getId().equals(managerId)) {
+                    m.setReportingManager(resolveManager(managerId, m.getId()));
+                    userRepository.save(m);
+                    added.add(m.getName());
+                }
             }
-            if (m.getReportingManager() == null || !m.getReportingManager().getId().equals(managerId)) {
-                m.setReportingManager(resolveManager(managerId, m.getId()));
-                userRepository.save(m);
-                added.add(m.getName());
+            for (User m : userRepository.findDirectReports(managerId)) {
+                if (!wanted.contains(m.getId()) && m.getRole() == memberRole) {
+                    m.setReportingManager(null);
+                    userRepository.save(m);
+                    removed.add(m.getName());
+                }
             }
-        }
-        for (User m : userRepository.findDirectReports(managerId)) {
-            if (!wanted.contains(m.getId()) && m.getRole() == memberRole) {
-                m.setReportingManager(null);
-                userRepository.save(m);
-                removed.add(m.getName());
+            if (!added.isEmpty() || !removed.isEmpty()) {
+                auditService.log(admin.getId(), AuditAction.TEAM_ASSIGN, "Team of " + manager.getName() + " ("
+                        + manager.getEmployeeCode() + "): added " + (added.isEmpty() ? "-" : String.join(", ", added))
+                        + "; removed " + (removed.isEmpty() ? "-" : String.join(", ", removed)), info);
             }
-        }
-        if (!added.isEmpty() || !removed.isEmpty()) {
-            auditService.log(admin.getId(), AuditAction.TEAM_ASSIGN, "Team of " + manager.getName() + " ("
-                    + manager.getEmployeeCode() + "): added " + (added.isEmpty() ? "-" : String.join(", ", added))
-                    + "; removed " + (removed.isEmpty() ? "-" : String.join(", ", removed)), info);
+            userRepository.flush();   // push the UPDATEs now so a database error is caught (and logged) here, not at commit
+        } catch (DataAccessException e) {
+            Throwable root = NestedExceptionUtils.getMostSpecificCause(e);
+            log.error("Team save FAILED for manager {} ({}), members {}, added {}, removed {}: {} - {}", managerId,
+                    manager.getEmployeeCode(), wanted, added, removed, root.getClass().getSimpleName(), root.getMessage(), e);
+            throw e;
         }
         return userRepository.findDirectReports(managerId).stream().map(UserResponse::from).toList();
     }
