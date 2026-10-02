@@ -142,11 +142,16 @@
             // the server already puts the first field message in `message`
             return err.message || MESSAGES.VALIDATION_FAILED;
         }
-        if (err.code && MESSAGES[err.code]) return MESSAGES[err.code];
+        if (err.code === 'CONFLICT' && d.cause) return MESSAGES.CONFLICT + ' — ' + d.cause;
+        if (err.code && MESSAGES[err.code] && err.code !== 'INTERNAL_ERROR') return MESSAGES[err.code];
         if (err.status === 0) return MESSAGES.NETWORK;
         if (err.status === 401) return MESSAGES.UNAUTHENTICATED;
         if (err.status === 403) return MESSAGES.ACCESS_DENIED;
-        if (err.status >= 500) return MESSAGES.INTERNAL_ERROR;
+        if (err.status >= 500) {
+            // details.errorId matches the "Unhandled error [id]" line in the server log; details.cause is only sent
+            // when the server runs with APP_ERRORS_EXPOSE_DETAILS=true
+            return MESSAGES.INTERNAL_ERROR + (d.errorId ? ' (ref ' + d.errorId + ')' : '') + (d.cause ? ' — ' + d.cause : '');
+        }
         return err.message || 'Something went wrong.';
     }
 
