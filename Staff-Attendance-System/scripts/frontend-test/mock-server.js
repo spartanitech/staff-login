@@ -531,6 +531,20 @@ function createMock() {
             }
         }
 
+        // ---- promotions (PromotionService) ----
+        if (p === '/api/promotions' || p.startsWith('/api/promotions/')) {
+            S.promos = S.promos || []; S.seq.promo = S.seq.promo || 0;
+            const list = () => ({ initialized: S.promos.some(x => x.kind === '_init') || S.promos.length > 0, items: S.promos.filter(x => x.kind !== '_init') });
+            const editor = () => { if (!['ADMIN', 'OWNER', 'RSM'].includes(caller.role)) throw new ApiErr(403, 'NOT_ALLOWED', 'Only Admin, Owner or Marketing Manager can change promotions.'); };
+            const mk = b => ({ id: ++S.seq.promo, kind: b.kind, name: b.name || null, code: b.code || null, type: b.type || null, discount: b.discount || null,
+                validTill: b.validTill || null, price: b.price == null ? null : Number(b.price), mrp: b.mrp == null ? null : Number(b.mrp),
+                redemptions: b.redemptions == null ? null : Number(b.redemptions), totalDiscount: b.totalDiscount == null ? null : Number(b.totalDiscount), ref: b.ref || null });
+            if (method === 'GET' && p === '/api/promotions') return [200, list()];
+            if (method === 'POST' && p === '/api/promotions/import') { editor(); if (!S.promos.length) { (body || []).forEach(b => S.promos.push(mk(b))); S.promos.push({ id: ++S.seq.promo, kind: '_init' }); } return [200, list()]; }
+            if (method === 'POST' && p === '/api/promotions') { editor(); if (body.ref) { const ex = S.promos.find(x => x.ref === body.ref); if (ex) return [201, ex]; } const x = mk(body); S.promos.push(x); return [201, x]; }
+            if ((m = /^\/api\/promotions\/(\d+)$/.exec(p)) && method === 'DELETE') { editor(); const x = S.promos.find(y => y.id === Number(m[1]) && y.kind !== '_init'); if (!x) throw new ApiErr(404, 'NOT_FOUND', 'Promotion not found.'); S.promos = S.promos.filter(y => y !== x); if (!S.promos.some(y => y.kind === '_init')) S.promos.push({ id: ++S.seq.promo, kind: '_init' }); return [204]; }
+        }
+
         if (method === 'GET' && p === '/api/users') { const ids = scopeIds(caller); return [200, S.users.filter(u => !ids || ids.has(u.id)).map(pub)]; }
         if (p.startsWith('/api/users') && method !== 'GET') need('ADMIN');
         if (method === 'POST' && p === '/api/users') {

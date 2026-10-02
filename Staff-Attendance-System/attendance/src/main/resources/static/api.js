@@ -342,6 +342,12 @@
         renameCall: function (id, shop) { return request('PUT', '/api/call-logs/' + id, { body: { shop: shop } }); },
         deleteCall: function (id) { return request('DELETE', '/api/call-logs/' + id); },
 
+        // promotions (Marketing Manager screen)
+        promotions: function () { return request('GET', '/api/promotions'); },
+        addPromotion: function (body) { return request('POST', '/api/promotions', { body: body }); },
+        importPromotions: function (items) { return request('POST', '/api/promotions/import', { body: items }); },
+        deletePromotion: function (id) { return request('DELETE', '/api/promotions/' + id); },
+
         // shops (Admin)
         adminShops: function (q) { return request('GET', '/api/admin/shops', { query: q }); },
         createShop: function (body) { return request('POST', '/api/admin/shops', { body: body }); },
