@@ -17,8 +17,11 @@ import com.spartan.attendance.security.AppUserDetails;
 import com.spartan.attendance.util.RequestInfo;
 import jakarta.persistence.criteria.Predicate;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
@@ -52,11 +55,42 @@ public class ShopService {
         return repository.findAll(spec, Sort.by("name")).stream().map(ShopResponse::from).toList();
     }
 
-    /** The active shops assigned to the signed-in Sales Officer - the only shops they may check in at. */
+    /**
+     * The active shops the signed-in Sales Officer may work at: the shops assigned to them, plus the team shops their own
+     * managers (ASM, RM, ...) added for the whole team. Another ASM's shops never appear here.
+     */
     @Transactional(readOnly = true)
     public List<ShopResponse> mine(AppUserDetails caller) {
-        return repository.findByAssignedOfficerIdAndStatusOrderByNameAsc(caller.getId(), Status.ACTIVE)
-                .stream().map(ShopResponse::from).toList();
+        User me = userRepository.findById(caller.getId()).orElseThrow(() -> ApiException.notFound("User not found."));
+        List<Shop> out = new ArrayList<>(repository.findByAssignedOfficerIdAndStatusOrderByNameAsc(me.getId(), Status.ACTIVE));
+        Set<Long> managers = managerChain(me);
+        if (!managers.isEmpty()) {
+            out.addAll(repository.findByAssignedOfficerIsNullAndStatusAndCreatedByIdIn(Status.ACTIVE, managers));
+        }
+        out.sort(Comparator.comparing(Shop::getName, String.CASE_INSENSITIVE_ORDER));
+        return out.stream().map(ShopResponse::from).toList();
+    }
+
+    /** May this Sales Officer check in at this shop? Their own active shop, or an active team shop of one of their managers. */
+    public static boolean usableBy(Shop shop, User officer) {
+        if (shop == null || officer == null || shop.getStatus() != Status.ACTIVE) {
+            return false;
+        }
+        if (shop.getAssignedOfficer() != null) {
+            return shop.getAssignedOfficer().getId().equals(officer.getId());
+        }
+        return shop.getCreatedBy() != null && managerChain(officer).contains(shop.getCreatedBy().getId());
+    }
+
+    /** Ids of everyone above this user in the reporting tree (their manager, that manager's manager, ...). */
+    private static Set<Long> managerChain(User u) {
+        Set<Long> ids = new HashSet<>();
+        User cursor = u.getReportingManager();
+        int guard = 0;
+        while (cursor != null && guard++ < 20 && ids.add(cursor.getId())) {
+            cursor = cursor.getReportingManager();
+        }
+        return ids;
     }
 
     @Transactional
@@ -215,13 +249,20 @@ public class ShopService {
         if (s.getCreatedBy() != null && caller.getId().equals(s.getCreatedBy().getId())) {
             return true;
         }
-        return s.getAssignedOfficer() != null && scope.contains(s.getAssignedOfficer().getId());
+        if (s.getAssignedOfficer() != null) {
+            return scope.contains(s.getAssignedOfficer().getId());
+        }
+        // a team shop (no single officer) belongs to whoever added it: visible to them and the managers above them
+        return s.getCreatedBy() != null && scope.contains(s.getCreatedBy().getId());
     }
 
-    /** A manager must hand the shop to one of their own Sales Officers (ADMIN/OWNER may leave it unassigned). */
+    /**
+     * A manager hands the shop to one of their own Sales Officers, or leaves the officer empty to make it a team shop
+     * that every Sales Officer under them can work at.
+     */
     private void requireTeamOfficer(AppUserDetails caller, Long officerId) {
         if (officerId == null) {
-            if (caller.getRole().hasGlobalScope()) {
+            if (caller.getRole().hasGlobalScope() || caller.getRole().isManager()) {
                 return;
             }
             throw ApiException.badRequest("OFFICER_REQUIRED", "Choose the Sales Officer this shop is for.");

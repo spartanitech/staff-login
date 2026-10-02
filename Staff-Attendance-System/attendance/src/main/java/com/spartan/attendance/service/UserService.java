@@ -13,6 +13,7 @@ import com.spartan.attendance.exception.ApiException;
 import com.spartan.attendance.repository.AttendanceRepository;
 import com.spartan.attendance.repository.CallLogRepository;
 import com.spartan.attendance.repository.PortalMessageRepository;
+import com.spartan.attendance.repository.SalesOrderRepository;
 import com.spartan.attendance.repository.ShopRepository;
 import com.spartan.attendance.repository.UserRepository;
 import com.spartan.attendance.security.AppUserDetails;
@@ -42,6 +43,7 @@ public class UserService {
     private final ScopeService scopeService;
     private final PortalMessageRepository messageRepository;
     private final CallLogRepository callLogRepository;
+    private final SalesOrderRepository salesOrderRepository;
 
     /** ADMIN/OWNER: everyone. Managers: their reporting tree. SO: only themselves. */
     @Transactional(readOnly = true)
@@ -174,6 +176,7 @@ public class UserService {
         messageRepository.clearRecipient(id);
         messageRepository.deleteBySenderId(id);
         callLogRepository.deleteByOfficerId(id);
+        salesOrderRepository.deleteByOfficerId(id);
         long removedAttendance = attendanceRepository.deleteByUserId(id);
         auditService.log(admin.getId(), AuditAction.USER_DELETE,
                 "Deleted user " + user.getUsername() + " (" + user.getEmployeeCode() + ", " + user.getRole()

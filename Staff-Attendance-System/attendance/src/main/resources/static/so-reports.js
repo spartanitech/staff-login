@@ -608,7 +608,8 @@
             (T.editing ? '<button class="sos-btn" onclick="SOReports.cancelEdit()">✕ Cancel</button>' : '') + '</div>' +
             '<div class="sos-form">' +
             '<label>Shop name *<input id="ts-name" value="' + esc(s.name || '') + '" placeholder="e.g. Sri Murugan Stores" maxlength="150"></label>' +
-            '<label>Sales Officer *<select id="ts-officer" onchange="SOReports.officerPicked(this.value)">' + officerOptions(s.assignedOfficerId) + '</select></label>' +
+            '<label>Sales Officer *<select id="ts-officer" onchange="SOReports.officerPicked(this.value)">' + officerOptions(s.assignedOfficerId) +
+            '<option value="__team"' + (s.id && s.assignedOfficerId == null ? ' selected' : '') + '>★ Whole team — every Sales Officer under me</option></select></label>' +
             '<label>City / Area<input id="ts-city" value="' + esc(s.city || '') + '" placeholder="e.g. Chennai" maxlength="80"></label>' +
             '<label>Locality<input id="ts-locality" value="' + esc(s.locality || '') + '" placeholder="e.g. T. Nagar" maxlength="120"></label>' +
             '<label>Region<select id="ts-region">' + ['', 'North', 'South', 'East', 'West'].map(function (r) {
@@ -633,7 +634,7 @@
         box.innerHTML = (S.team && S.team.length ? shopForm(editing)
                 : '<div class="sos-card"><div class="sos-empty">No active Sales Officer reports to you yet. Ask the Admin to set you as their reporting manager.</div></div>') +
             '<div class="sos-card"><div class="sos-head"><div><div class="sos-title">Shops of your team</div>' +
-            '<div class="sos-sub">Each Sales Officer sees only the shops assigned to them here</div></div>' +
+            '<div class="sos-sub">Each Sales Officer sees the shops assigned to them, plus your "whole team" shops. Other ASMs never see these.</div></div>' +
             '<span style="display:flex;gap:6px;"><button class="sos-btn" onclick="SOReports.exportTeamShops(\'pdf\')">📄 PDF</button>' +
             '<button class="sos-btn" onclick="SOReports.exportTeamShops(\'excel\')">📊 Excel</button></span></div>' +
             '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">' +
@@ -655,7 +656,7 @@
             '<table class="sos-tbl"><thead><tr><th>Shop</th><th>Sales Officer</th><th>City / Locality</th><th>Mobile</th><th>Address</th><th>Categories</th><th></th></tr></thead><tbody>' +
             list.map(function (s) {
                 return '<tr><td data-l="Shop"><b>' + esc(s.name) + '</b><div class="sos-sub">' + esc(s.code) + (s.status === 'INACTIVE' ? ' · inactive' : '') + '</div></td>' +
-                    '<td data-l="Sales Officer">' + esc(s.assignedOfficerName || '— unassigned —') + '</td>' +
+                    '<td data-l="Sales Officer">' + (s.assignedOfficerId ? esc(s.assignedOfficerName || '') : '★ Whole team') + '</td>' +
                     '<td data-l="City / Locality">' + esc([s.city, s.locality].filter(Boolean).join(' · ') || '—') + '</td>' +
                     '<td data-l="Mobile">' + (s.phone ? '<a href="tel:' + esc(s.phone) + '">' + esc(s.phone) + '</a>' : '—') + '</td>' +
                     '<td data-l="Address">' + esc(s.address || '—') + '</td>' +
@@ -671,12 +672,13 @@
         var loc = v('ts-loc').split(/[,\s]+/).filter(Boolean).map(Number);
         return {
             body: {
-                name: v('ts-name'), assignedOfficerId: v('ts-officer') ? Number(v('ts-officer')) : null,
+                name: v('ts-name'), assignedOfficerId: v('ts-officer') && v('ts-officer') !== '__team' ? Number(v('ts-officer')) : null,
                 city: v('ts-city'), locality: v('ts-locality'), region: v('ts-region'), phone: v('ts-phone'), address: v('ts-address'),
                 latitude: loc.length >= 2 ? loc[0] : null, longitude: loc.length >= 2 ? loc[1] : null,
                 allowedRadiusMeters: v('ts-radius') ? Number(v('ts-radius')) : null,
                 productCategories: SO.pickedCats('ts') || ''
             },
+            wholeTeam: v('ts-officer') === '__team',
             locOk: loc.length >= 2 && isFinite(loc[0]) && isFinite(loc[1]) && Math.abs(loc[0]) <= 90 && Math.abs(loc[1]) <= 180
         };
     }
@@ -686,7 +688,7 @@
         var f = readShopForm();
         function bad(t) { if (msg) { msg.className = 'sos-msg bad'; msg.textContent = t; } }
         if (!f.body.name) return bad('Enter the shop name.');
-        if (!f.body.assignedOfficerId) return bad('Choose the Sales Officer this shop is for.');
+        if (!f.body.assignedOfficerId && !f.wholeTeam) return bad('Choose the Sales Officer this shop is for (or "Whole team").');
         if (!f.locOk) return bad('Enter the shop location as "latitude, longitude" (or tap 📍 at the shop).');
         if (btn) btn.disabled = true;
         try {
@@ -699,7 +701,7 @@
                 await H.api().createTeamShop(body);
             }
             var who = (S.team || []).find(function (u) { return u.id === body.assignedOfficerId; });
-            H.toast((T.editing ? 'Shop updated' : '"' + body.name + '" added') + (who ? ' for ' + who.name : ''));
+            H.toast((T.editing ? 'Shop updated' : '"' + body.name + '" added') + (who ? ' for ' + who.name : (f.wholeTeam ? ' for your whole team' : '')));
             T.editing = null;
             S.teamShops = (await H.api().teamShops()) || [];
             renderTeamShops();

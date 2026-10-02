@@ -134,8 +134,7 @@ public class AttendanceService {
             throw ApiException.conflict("ALREADY_CHECKED_IN", "You have already checked in today.");
         }
         Shop shop = shopRepository.findById(shopId).orElseThrow(() -> ApiException.notFound("Shop not found."));
-        if (shop.getStatus() != Status.ACTIVE || shop.getAssignedOfficer() == null
-                || !shop.getAssignedOfficer().getId().equals(user.getId())) {
+        if (!ShopService.usableBy(shop, user)) {   // own shop, or a team shop of one of my managers
             throw ApiException.forbidden("SHOP_NOT_ASSIGNED", "That shop is not assigned to you.");
         }
 

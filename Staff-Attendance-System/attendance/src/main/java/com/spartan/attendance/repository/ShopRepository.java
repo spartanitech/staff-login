@@ -17,6 +17,9 @@ public interface ShopRepository extends JpaRepository<Shop, Long>, JpaSpecificat
     @EntityGraph(attributePaths = {"assignedOfficer", "createdBy"})
     List<Shop> findByAssignedOfficerIdAndStatusOrderByNameAsc(Long officerId, Status status);
 
+    /** Team shops: added by a manager for their whole team (no single officer) - see ShopService#mine. */
+    List<Shop> findByAssignedOfficerIsNullAndStatusAndCreatedByIdIn(Status status, java.util.Collection<Long> creatorIds);
+
     boolean existsByNameIgnoreCaseAndAssignedOfficerId(String name, Long officerId);
 
     boolean existsByNameIgnoreCaseAndAssignedOfficerIdAndIdNot(String name, Long officerId, Long id);

@@ -313,6 +313,10 @@
         updateTeamShop: function (id, body) { return request('PUT', '/api/team/shops/' + id, { body: body }); },
         deleteTeamShop: function (id) { return request('DELETE', '/api/team/shops/' + id); },
 
+        // orders booked by Sales Officers (the SO saves; managers and the Admin read their scope)
+        orders: function (q) { return request('GET', '/api/orders', { query: q }); },
+        saveOrder: function (body) { return request('PUT', '/api/orders', { body: body }); },
+
         // DP (distributor) names
         dpNames: function () { return request('GET', '/api/dp-names'); },
         addDpName: function (name) { return request('POST', '/api/dp-names', { body: { name: name } }); },

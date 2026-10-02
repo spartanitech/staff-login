@@ -81,7 +81,14 @@
         var t = L.targets.find(function (x) { return x.officerId === id; });
         return t ? Number(t.amount) || 0 : 0;
     }
-    function shopsOf(ids) { return L.shops.filter(function (s) { return s.assignedOfficerId != null && ids[s.assignedOfficerId]; }); }
+    function shopsOf(ids) {
+        var me = S.user ? S.user.id : null;
+        return L.shops.filter(function (s) {
+            if (s.assignedOfficerId != null) return !!ids[s.assignedOfficerId];
+            // a "whole team" shop added by a manager: belongs to whoever added it
+            return s.createdById != null && (s.createdById === me || !!ids[s.createdById] || (VIEW.active && VIEW.user && s.createdById === VIEW.user.id));
+        });
+    }
 
     /** Descendants of a user id in the reporting tree (from the users list). */
     function treeOf(id) {
@@ -700,7 +707,7 @@
 
         var sRows = shops.slice(0, 50).map(function (s) {
             return '<tr><td data-l="Shop"><b>' + esc(s.name) + '</b><div class="sos-sub">' + esc([s.city, s.locality].filter(Boolean).join(' · ')) + '</div></td>' +
-                '<td data-l="Sales Officer">' + esc(s.assignedOfficerName || '—') + '</td>' +
+                '<td data-l="Sales Officer">' + (s.assignedOfficerId ? esc(s.assignedOfficerName || '—') : '★ Whole team') + '</td>' +
                 '<td data-l="Mobile">' + (s.phone ? '<a href="tel:' + esc(s.phone) + '">' + esc(s.phone) + '</a>' : '—') + '</td>' +
                 '<td data-l="Categories">' + (s.productCategories ? SO.categoryChips(s.productCategories) : '—') + '</td></tr>';
         }).join('');

@@ -198,3 +198,22 @@ Everything below is stored in MySQL (Hibernate `ddl-auto=update` creates the new
   DP sales) and targets; managers without a team are flagged. The header avatar shows the signed-in person.
 * New tables `portal_messages` and `call_logs` are created by `ddl-auto=update` on the next start – no manual SQL.
 * Test: `cd scripts/ui-test && node sync-e2e.js` (37 checks against the mock API, real headless Chromium).
+
+## Orders on the server, "whole team" shops, phone layout (so-orders.js, mobile.js)
+* **Orders** – when a Sales Officer confirms an order (product picker, "repeat last order" or the order-booking form) it is
+  saved with `PUT /api/orders` (table `sales_orders`, created by `ddl-auto=update`). Re-confirming the same shop on the same
+  day updates that order (`clientRef` = day + shop). Offline orders wait on the phone and are sent automatically.
+  `GET /api/orders?from&to&officerId` follows the reporting tree: the SO sees their own, an ASM their team's, Admin/Owner all.
+  * ASM: **Team Orders** menu item + an **Orders today** card on the dashboard (refreshes every minute).
+  * Admin: new **Orders** section (filters, item details, Excel).
+  * RM: the existing **Orders** menu item now shows the server orders of the RM's tree (was demo data).
+  * Marketing Manager: new **Orders** menu item (also in the phone More menu). Owner: **Orders** tab (desktop + phone).
+* **An order no longer marks attendance.** Confirming an order used to complete the visit and stamp login/logout times;
+  attendance is now only the explicit shop check-in (GPS + live photo).
+* **Whole-team shops** – in Team Shops an ASM can pick "★ Whole team" instead of one Sales Officer. Every SO under that
+  ASM (any depth) sees it in My Shops and may check in there; the ASM and the managers above them and the Admin see it;
+  another ASM's team never does. SO-added shops stay visible to that SO, their ASM chain and the Admin only.
+* **Phone layout** – `mobile.js` turns every wide table (Staff, Shops, Locations, Audit, attendance, Orders …) into one
+  card per row below 680 px (column names copied from the header automatically), stacks headers/toolbars, and uses
+  16 px inputs so iPhones don't zoom.
+* Tests: `cd scripts/ui-test && node orders-e2e.js` (31 checks), `node mobile-audit.js` (phone-width overflow audit).

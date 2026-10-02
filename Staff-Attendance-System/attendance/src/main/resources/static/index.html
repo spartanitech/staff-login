@@ -4840,10 +4840,9 @@
             repeatedFrom: found.from
         };
         visit.orderStatus = 'Order Verified';
-        visit.status = 'Completed';
-        if (!visit.loginTime) visit.loginTime = savedAt;
-        visit.logoutTime = savedAt;
+        // no attendance from an order: only the shop check-in (GPS + photo) marks the officer present
         markVisitSynced(visit);
+        if (window.SOOrders && SOOrders.push) SOOrders.push(shopName, visit.order);
 
         currentOfficer.visits = (currentOfficer.plannedVisitsList || []).filter(v => v.status === 'Completed').length;
 
@@ -5192,13 +5191,11 @@
         const savedAt = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
         visit.order = { items, total, itemCount: items.length, savedAt, orderedOn: new Date().toISOString() };
         visit.orderStatus = 'Order Verified';
-        visit.status = 'Completed';
-        // Confirming the order is the real end of the visit, so that is the close
-        // time. Only stamp it if the attendance flow has not already set one.
-        if (!visit.loginTime) visit.loginTime = savedAt;
-        if (!visit.logoutTime) visit.logoutTime = savedAt;
+        // Confirming an order does NOT mark attendance or complete the visit any more: attendance is only recorded by
+        // the explicit shop check-in (GPS + live photo). The order itself is saved on the server by so-orders.js.
         psRenderVisitClock();
         markVisitSynced(visit); // order placed = data captured, so it syncs right away
+        if (window.SOOrders && SOOrders.push) SOOrders.push(psActiveShopName, visit.order);   // saved on the server
         currentOfficer.visits = (currentOfficer.plannedVisitsList || []).filter(v => v.status === 'Completed').length;
 
         saveSOOfficers();
@@ -6638,6 +6635,7 @@
         const order = { qty: { ...orderBookQty }, total, itemCount, savedAt: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }), orderedOn: new Date().toISOString() };
         const visit = getActiveVisitForOrderBook();
         if (visit) visit.order = order;
+        if (itemCount && window.SOOrders && SOOrders.push) SOOrders.push(getActiveShopNameForOrderBook(), order);   // saved on the server
 
         const summaryHtml = itemCount ? `🧾 Order saved: ${itemCount} item(s), ₹${total.toLocaleString('en-IN')}` : '';
         if (orderBookContext === 'sv') {
@@ -23930,6 +23928,8 @@
 <script src="so-reports.js"></script>
 <script src="portal-live.js"></script>
 <script src="portal-sync.js"></script>
+<script src="so-orders.js"></script>
+<script src="mobile.js"></script>
 
 </body>
 </html>

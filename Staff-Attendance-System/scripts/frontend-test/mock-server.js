@@ -33,7 +33,7 @@ function haversine(lat1, lon1, lat2, lon2) {
 }
 
 function createMock() {
-    const S = { msgs: [], calls: [], seq: { user: 0, att: 0, loc: 0, audit: 0, shop: 0, msg: 0, call: 0 }, users: [], atts: [], locs: [], shops: [], photos: new Map(), audit: [], tokens: new Map(), maxAcc: 100 };
+    const S = { msgs: [], calls: [], orders: [], seq: { order: 0, user: 0, att: 0, loc: 0, audit: 0, shop: 0, msg: 0, call: 0 }, users: [], atts: [], locs: [], shops: [], photos: new Map(), audit: [], tokens: new Map(), maxAcc: 100 };
     const settings = { timezone: IST, shiftStart: '09:30', lateGraceMinutes: 15, halfDayMinutes: 240, maxAccuracyMeters: 100, weeklyOff: 'SUNDAY' };
 
     function addUser(code, name, username, password, role, designation, area, region, mgr) {
@@ -71,6 +71,9 @@ function createMock() {
         return out;
     };
     const scopeIds = u => (u.role === 'ADMIN' || u.role === 'OWNER') ? null : (u.role === 'SO' ? new Set([u.id]) : descendants(u.id));
+    // ShopService.managerChain / usableBy: an SO may use their own shops and the "whole team" shops of their managers
+    const managerChain = u => { const out = new Set(); for (let c = S.users.find(x => x.id === u.reportingManagerId), g = 0; c && g < 20 && !out.has(c.id); c = S.users.find(x => x.id === c.reportingManagerId), g++) out.add(c.id); return out; };
+    const usableBy = (sh, u) => sh.status === 'ACTIVE' && (sh.assignedOfficerId != null ? sh.assignedOfficerId === u.id : (sh.createdById != null && managerChain(u).has(sh.createdById)));
 
     const shopResp = sh => { const o = S.users.find(u => u.id === sh.assignedOfficerId); const c = S.users.find(u => u.id === sh.createdById);
         return { city: null, createdById: null, ...sh, assignedOfficerName: o ? o.name : null, createdByName: c ? c.name : null }; };
@@ -163,7 +166,7 @@ function createMock() {
             if (S.atts.find(x => x.userId === caller.id && x.attendanceDate === todayIso())) throw new ApiErr(409, 'ALREADY_CHECKED_IN', 'Already checked in today');
             const f = body.fields, shop = S.shops.find(x => x.id === Number(f.shopId));
             if (!shop) throw new ApiErr(404, 'NOT_FOUND', 'Shop not found.');
-            if (shop.status !== 'ACTIVE' || shop.assignedOfficerId !== caller.id) throw new ApiErr(403, 'SHOP_NOT_ASSIGNED', 'That shop is not assigned to you.');
+            if (!usableBy(shop, caller)) throw new ApiErr(403, 'SHOP_NOT_ASSIGNED', 'That shop is not assigned to you.');
             const gps = { latitude: Number(f.latitude), longitude: Number(f.longitude), accuracy: Number(f.accuracy) };
             validateFix(gps);
             const dist = haversine(gps.latitude, gps.longitude, shop.latitude, shop.longitude);
@@ -197,7 +200,7 @@ function createMock() {
                 latitude: body.latitude, longitude: body.longitude, allowedRadiusMeters: 50, assignedOfficerId: caller.id, createdAt: nowLdt() };
             S.shops.push(sh); return [201, shopResp(sh)];
         }
-        if (method === 'GET' && p === '/api/shops/mine') { need('SO'); return [200, S.shops.filter(x => x.status === 'ACTIVE' && x.assignedOfficerId === caller.id).map(shopResp)]; }
+        if (method === 'GET' && p === '/api/shops/mine') { need('SO'); return [200, S.shops.filter(x => usableBy(x, caller)).map(shopResp)]; }
         if (method === 'POST' && p === '/api/attendance/check-in') {
             if (caller.role === 'SO') throw bad('SHOP_CHECKIN_REQUIRED', 'Sales Officers mark attendance at one of their assigned shops, with a live photo of the shop.');
             if (S.atts.find(x => x.userId === caller.id && x.attendanceDate === todayIso())) throw new ApiErr(409, 'ALREADY_CHECKED_IN', 'Already checked in today');
@@ -226,17 +229,17 @@ function createMock() {
         if (p === '/api/team/shops' || p.startsWith('/api/team/shops/')) {
             need('ADMIN', 'OWNER', 'RSM', 'RM', 'ASM');
             const ids = scopeIds(caller);
-            const visible = sh => !ids || sh.createdById === caller.id || (sh.assignedOfficerId != null && ids.has(sh.assignedOfficerId));
+            const visible = sh => !ids || sh.createdById === caller.id || (sh.assignedOfficerId != null ? ids.has(sh.assignedOfficerId) : (sh.createdById != null && ids.has(sh.createdById)));
             if (method === 'GET' && p === '/api/team/shops') return [200, S.shops.filter(visible).filter(x => !q.officerId || x.assignedOfficerId === Number(q.officerId)).sort((a, b) => a.name.localeCompare(b.name)).map(shopResp)];
             const checkTeam = b => {
                 if (!b.name || !String(b.name).trim()) throw bad('VALIDATION_FAILED', 'Shop name is required');
                 if (typeof b.latitude !== 'number' || typeof b.longitude !== 'number') throw bad('VALIDATION_FAILED', 'latitude is required');
-                if (b.assignedOfficerId == null) throw bad('OFFICER_REQUIRED', 'Choose the Sales Officer this shop is for.');
+                if (b.assignedOfficerId == null) return;   // a "whole team" shop
                 if (ids && !ids.has(b.assignedOfficerId)) throw new ApiErr(403, 'OUT_OF_SCOPE', 'You can only assign shops to Sales Officers in your own team.');
                 const o = S.users.find(u => u.id === b.assignedOfficerId);
                 if (!o || o.role !== 'SO' || o.status !== 'ACTIVE') throw bad('INVALID_OFFICER', 'A shop can only be assigned to an active Sales Officer.');
             };
-            const dup = (b, id) => { if (S.shops.some(x => x.id !== id && x.assignedOfficerId === b.assignedOfficerId && x.name.toLowerCase() === b.name.trim().toLowerCase())) throw new ApiErr(409, 'SHOP_NAME_TAKEN', `This Sales Officer already has a shop called '${b.name.trim()}'.`); };
+            const dup = (b, id) => { if (b.assignedOfficerId != null && S.shops.some(x => x.id !== id && x.assignedOfficerId === b.assignedOfficerId && x.name.toLowerCase() === b.name.trim().toLowerCase())) throw new ApiErr(409, 'SHOP_NAME_TAKEN', `This Sales Officer already has a shop called '${b.name.trim()}'.`); };
             const fields = b => ({ name: b.name.trim(), locality: b.locality || null, region: b.region || null, city: b.city || null, address: b.address || null, phone: b.phone || null, productCategories: b.productCategories || null,
                 latitude: b.latitude, longitude: b.longitude, allowedRadiusMeters: b.allowedRadiusMeters == null ? 50 : b.allowedRadiusMeters, assignedOfficerId: b.assignedOfficerId });
             if (method === 'POST' && p === '/api/team/shops') {
@@ -302,6 +305,31 @@ function createMock() {
             return [200, S.stock.filter(e => e.officerId === caller.id && e.date === date)];
         }
         // ---- Daily Shop Report (DailyReportService)
+        // ---- orders (mirrors OrderService)
+        if (p === '/api/orders') {
+            const ordResp = o => { const u = S.users.find(x => x.id === o.officerId) || {}; const m = S.users.find(x => x.id === u.reportingManagerId);
+                return { ...o, officerName: u.name, officerArea: u.area || null, managerId: m ? m.id : null, managerName: m ? m.name : null }; };
+            if (method === 'GET') {
+                const to = q.to || todayIso(), from = q.from || to;
+                let ids = scopeIds(caller);
+                if (q.officerId) { if (ids && !ids.has(Number(q.officerId))) throw new ApiErr(403, 'OUT_OF_SCOPE', 'You can only view people who report to you.'); ids = new Set([Number(q.officerId)]); }
+                return [200, S.orders.filter(o => (!ids || ids.has(o.officerId)) && o.date >= from && o.date <= to)
+                    .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id).map(ordResp)];
+            }
+            if (method === 'PUT') {
+                need('SO');
+                if (!body || !body.clientRef) throw bad('BAD_ORDER', 'The order reference is missing.');
+                if (!body.shopName) throw bad('SHOP_REQUIRED', 'Choose the shop of this order.');
+                const items = (body.items || []).filter(it => it && it.name && Number(it.qty) > 0 && Number(it.price) >= 0)
+                    .map(it => ({ name: it.name, category: it.category || null, price: Number(it.price), qty: Number(it.qty) }));
+                if (!items.length) throw bad('NO_ITEMS', 'Add at least one product to the order.');
+                let o = S.orders.find(x => x.officerId === caller.id && x.clientRef === body.clientRef);
+                if (!o) { o = { id: ++S.seq.order, officerId: caller.id, clientRef: body.clientRef, createdAt: nowLdt() }; S.orders.push(o); }
+                Object.assign(o, { shopId: body.shopId || null, shopName: body.shopName, date: body.date || todayIso(), items, itemCount: items.length,
+                    total: Math.round(items.reduce((t, it) => t + it.qty * it.price, 0) * 100) / 100, status: body.status || 'CONFIRMED', updatedAt: nowLdt() });
+                return [200, ordResp(o)];
+            }
+        }
         if (p === '/api/daily-reports' && method === 'GET') {
             const who = q.officerId ? Number(q.officerId) : caller.id; visibleUser(who); const date = q.date || todayIso();
             const r = S.reports.find(x => x.officerId === who && x.date === date);
